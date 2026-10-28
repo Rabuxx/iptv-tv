@@ -1,8 +1,8 @@
 name: Build APK
 
-# - push sur main      → APK compilé et disponible en artefact du workflow
-# - push d'un tag v*   → APK compilé à la version du tag et publié en Release GitHub
-#                        (c'est cette Release que l'app détecte pour se mettre à jour)
+# - push on main     -> APK built and available as workflow artifact
+# - push of a tag v* -> APK built with the tag version and published as a GitHub Release
+#                       (the app checks this Release to update itself)
 on:
   push:
     branches: [main]
@@ -31,29 +31,31 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Version depuis le tag
+      - name: Version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         run: echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Clé de signature
+      - name: Signing key
         if: env.KEYSTORE_BASE64 != ''
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           echo "IPTV_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
-      - name: Avertissement si pas de clé
+      - name: Warning if no key
         if: env.KEYSTORE_BASE64 == ''
-        run: echo "::warning::Secret KEYSTORE_BASE64 absent — APK signé avec une clé debug jetable, les mises à jour par-dessus échoueront."
+        run: echo "::warning::KEYSTORE_BASE64 secret missing - APK signed with a throwaway debug key, updates will fail."
 
-      - name: Compilation
+      - name: Build
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
-      - name: Nommer l'APK
+      - name: Name the APK
         run: |
           VERSION="${VERSION_NAME:-dev-${GITHUB_SHA::7}}"
           cp app/build/outputs/apk/release/app-release.apk "rabux-tv-${VERSION}.apk"
+          # Fixed-name copy: .../releases/latest/download/rabux-tv.apk always points to the latest version
+          cp app/build/outputs/apk/release/app-release.apk "rabux-tv.apk"
           echo "APK_FILE=rabux-tv-${VERSION}.apk" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
@@ -61,9 +63,11 @@ jobs:
           name: ${{ env.APK_FILE }}
           path: ${{ env.APK_FILE }}
 
-      - name: Publier la Release
+      - name: Publish the Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.APK_FILE }}
+          files: |
+            ${{ env.APK_FILE }}
+            rabux-tv.apk
           generate_release_notes: true
