@@ -76,6 +76,17 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Le rapport lint est publié par la CI ; il n'empêche pas une Release
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
+        htmlReport = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -99,4 +110,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
+
+    // Rangée « À suivre » de l'écran d'accueil Android TV
+    implementation("androidx.tvprovider:tvprovider:1.0.0")
+
+    // Tests unitaires (JVM)
+    testImplementation("junit:junit:4.13.2")
 }

@@ -1,0 +1,20 @@
+# Dependabot opens a pull request each week when a dependency has a new version.
+# The "Build APK" workflow runs the tests on each pull request: merge only if it is green.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # Compose, Media3, Lifecycle... updated together to stay compatible
+      androidx:
+        patterns: ["androidx.*"]
+      kotlin:
+        patterns: ["org.jetbrains.kotlin*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

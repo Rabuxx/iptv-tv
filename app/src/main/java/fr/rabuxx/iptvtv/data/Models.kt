@@ -152,3 +152,30 @@ const val FAVORITES_CATEGORY = "__favorites__"
 const val REPLAY_CATEGORY = "__replay__"
 /** Films / séries : derniers ajouts FR et VOSTFR de tout le catalogue. */
 const val LATEST_CATEGORY = "__latest__"
+/** Direct : ouvre la page « Sport ce soir » au lieu d'une catégorie. */
+const val SPORT_CATEGORY = "__sport__"
+
+/** Programme en cours parmi une liste triée, ou null. */
+fun List<EpgProgram>.nowPlaying(nowSec: Long = System.currentTimeMillis() / 1000): EpgProgram? =
+    firstOrNull { it.startTs <= nowSec && nowSec < it.stopTs }
+
+/** Programme qui suit celui en cours. */
+fun List<EpgProgram>.upNext(nowSec: Long = System.currentTimeMillis() / 1000): EpgProgram? =
+    firstOrNull { it.startTs > nowSec }
+
+/** Avancement du programme entre 0 et 1. */
+fun EpgProgram.progress(nowSec: Long = System.currentTimeMillis() / 1000): Float =
+    if (stopTs <= startTs) 0f else ((nowSec - startTs).toFloat() / (stopTs - startTs)).coerceIn(0f, 1f)
+
+/** Programme d'une page « Sport ce soir ». */
+data class SportProgram(val channel: Channel, val program: EpgProgram)
+
+data class SportTonight(
+    val live: List<SportProgram> = emptyList(),
+    val upcoming: List<SportProgram> = emptyList(),
+    /** Chaînes sport utilisées, pour zapper de l'une à l'autre depuis le lecteur. */
+    val channels: List<Channel> = emptyList(),
+)
+
+/** Clé de visibilité d'une catégorie : les identifiants Direct / Films / Séries peuvent se recouper. */
+fun categoryKey(section: Section, categoryId: String) = "${section.name}:$categoryId"

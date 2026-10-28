@@ -13,7 +13,7 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
-const val USER_AGENT = "RabuxTV/0.4 (Android TV)"
+const val USER_AGENT = "RabuxTV/0.6 (Android TV)"
 
 /**
  * Client pour l'API Xtream Codes (player_api.php).
@@ -97,23 +97,36 @@ class XtreamClient(private val creds: Credentials, private val cache: DiskCache?
     suspend fun replayPrograms(channel: Channel): List<EpgProgram> = withContext(Dispatchers.IO) {
         val body = get(apiUrl("get_simple_data_table", mapOf("stream_id" to channel.streamId)))
         val json = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext emptyList()
-        val listings = json.optJSONArray("epg_listings") ?: return@withContext emptyList()
         val now = System.currentTimeMillis() / 1000
-        listings.objects().mapNotNull { o ->
+        parsePrograms(json)
+            .filter { it.hasArchive && it.stopTs <= now }
+            .sortedByDescending { it.startTs }
+    }
+
+    // ---------- Guide TV ----------
+
+    /** Programme en cours et suivants d'une chaîne (get_short_epg), triés dans l'ordre chronologique. */
+    suspend fun shortEpg(channel: Channel, limit: Int = 4): List<EpgProgram> = withContext(Dispatchers.IO) {
+        val body = get(apiUrl("get_short_epg", mapOf("stream_id" to channel.streamId, "limit" to limit.toString())))
+        val json = runCatching { JSONObject(body) }.getOrNull() ?: return@withContext emptyList()
+        val now = System.currentTimeMillis() / 1000
+        parsePrograms(json).filter { it.stopTs > now }.sortedBy { it.startTs }
+    }
+
+    private fun parsePrograms(json: JSONObject): List<EpgProgram> {
+        val listings = json.optJSONArray("epg_listings") ?: return emptyList()
+        return listings.objects().mapNotNull { o ->
             val start = o.optString("start_timestamp").toLongOrNull() ?: return@mapNotNull null
             val stop = o.optString("stop_timestamp").toLongOrNull() ?: return@mapNotNull null
-            val raw = o.str("start") ?: return@mapNotNull null
             EpgProgram(
                 title = decode(o.str("title")) ?: "Programme",
                 description = decode(o.str("description")),
-                startRaw = raw,
+                startRaw = o.str("start") ?: "",
                 startTs = start,
                 stopTs = stop,
                 hasArchive = o.optString("has_archive") == "1",
             )
         }
-            .filter { it.hasArchive && it.stopTs <= now }
-            .sortedByDescending { it.startTs }
     }
 
     fun replayUrl(channel: Channel, program: EpgProgram): String {

@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.Catalog
 import fr.rabuxx.iptvtv.MainViewModel
+import fr.rabuxx.iptvtv.PinPurpose
 import fr.rabuxx.iptvtv.UiState
 import fr.rabuxx.iptvtv.UpdateState
 import fr.rabuxx.iptvtv.data.Category
@@ -43,6 +44,10 @@ import fr.rabuxx.iptvtv.data.LATEST_CATEGORY
 import fr.rabuxx.iptvtv.data.ListFilter
 import fr.rabuxx.iptvtv.data.Ranking
 import fr.rabuxx.iptvtv.data.REPLAY_CATEGORY
+import fr.rabuxx.iptvtv.data.SPORT_CATEGORY
+import fr.rabuxx.iptvtv.data.nowPlaying
+import fr.rabuxx.iptvtv.data.progress
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import fr.rabuxx.iptvtv.data.Section
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -52,6 +57,7 @@ import java.util.Locale
 private val FavoritesChip = Category(FAVORITES_CATEGORY, "★ Favoris")
 private val ReplayChip = Category(REPLAY_CATEGORY, "⟲ Replay")
 private val LatestChip = Category(LATEST_CATEGORY, "✦ Dernières sorties")
+private val SportChip = Category(SPORT_CATEGORY, "⚽ Sport ce soir")
 
 /** Écran principal : barre d'onglets façon tvOS + contenu de la section active. */
 @Composable
@@ -81,6 +87,7 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
             selected = state.section,
             tabFocus = tabFocus,
             updateBadge = state.update is UpdateState.Available,
+            sleepEndsAt = state.sleepEndsAt,
             onSelect = vm::selectSection,
         )
 
@@ -92,9 +99,14 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
 
                 Section.Live -> {
                     val replayMode = state.live.selectedId == REPLAY_CATEGORY
+                    val epg by vm.epg.collectAsStateWithLifecycle()
+                    val preview = rememberChannelPreview(enabled = state.previewEnabled && !replayMode, urlFor = vm::liveUrl)
                     CatalogContent(
                         catalog = state.live,
-                        extraCategories = listOfNotNull(FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
+                        section = Section.Live,
+                        state = state,
+                        onLongPressCategory = { vm.openCategoryOptions(Section.Live, it) },
+                        extraCategories = listOfNotNull(SportChip, FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
                         columns = 4,
                         emptyText = when (state.live.selectedId) {
                             FAVORITES_CATEGORY -> "Aucune chaîne favorite.\nMaintiens OK sur une chaîne pour l'ajouter."
@@ -103,21 +115,33 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                         },
                         restore = restoreHere,
                         onRestored = onRestored,
-                        onSelectCategory = { vm.selectCategory(Section.Live, it) },
+                        onSelectCategory = { id ->
+                            if (id == SPORT_CATEGORY) vm.openSport() else vm.selectCategory(Section.Live, id)
+                        },
                         onRetry = { vm.retry(Section.Live) },
                         onReload = { vm.reload(Section.Live) },
                         itemsLabel = { n -> if (n > 1) "$n chaînes" else "$n chaîne" },
                     ) { index, channel, requester ->
+                        // Programme en cours, demandé quand la carte apparaît
+                        LaunchedEffect(channel.streamId) { if (!replayMode) vm.requestEpg(channel) }
+                        val now = epg[channel.streamId]?.nowPlaying()
                         MediaCard(
                             title = channel.name,
                             image = channel.icon,
                             aspectRatio = 16f / 9f,
                             contentScale = ContentScale.Fit,
                             imagePadding = 14.dp,
-                            subtitle = if (replayMode) {
-                                "Replay ${channel.archiveDays} j"
+                            subtitle = when {
+                                replayMode -> "Replay ${channel.archiveDays} j"
+                                now != null -> now.title
+                                else -> channel.number.takeIf { it.isNotBlank() }?.let { "Chaîne $it" }
+                            },
+                            progress = now?.progress() ?: 0f,
+                            onFocusChange = { focused -> preview.onFocus(channel, focused) },
+                            overlay = if (preview.isShowing(channel)) {
+                                { PreviewVideo(preview) }
                             } else {
-                                channel.number.takeIf { it.isNotBlank() }?.let { "Chaîne $it" }
+                                null
                             },
                             focusRequester = requester,
                             favorite = state.favorites.has(channel),
@@ -132,6 +156,9 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
 
                 Section.Movies -> CatalogContent(
                     catalog = state.movies,
+                    section = Section.Movies,
+                    state = state,
+                    onLongPressCategory = { vm.openCategoryOptions(Section.Movies, it) },
                     extraCategories = listOfNotNull(LatestChip.takeIf { state.preferFrench }, FavoritesChip),
                     columns = 6,
                     emptyText = when (state.movies.selectedId) {
@@ -163,6 +190,9 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
 
                 Section.Series -> CatalogContent(
                     catalog = state.series,
+                    section = Section.Series,
+                    state = state,
+                    onLongPressCategory = { vm.openCategoryOptions(Section.Series, it) },
                     extraCategories = listOfNotNull(LatestChip.takeIf { state.preferFrench }, FavoritesChip),
                     columns = 6,
                     emptyText = when (state.series.selectedId) {
@@ -201,7 +231,13 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun TopBar(selected: Section, tabFocus: FocusRequester, updateBadge: Boolean, onSelect: (Section) -> Unit) {
+private fun TopBar(
+    selected: Section,
+    tabFocus: FocusRequester,
+    updateBadge: Boolean,
+    sleepEndsAt: Long?,
+    onSelect: (Section) -> Unit,
+) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -230,12 +266,12 @@ private fun TopBar(selected: Section, tabFocus: FocusRequester, updateBadge: Boo
                 )
             }
         }
-        Clock(Modifier.align(Alignment.CenterEnd))
+        Clock(sleepEndsAt, Modifier.align(Alignment.CenterEnd))
     }
 }
 
 @Composable
-private fun Clock(modifier: Modifier = Modifier) {
+private fun Clock(sleepEndsAt: Long?, modifier: Modifier = Modifier) {
     var now by remember { mutableStateOf(Date()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -243,8 +279,12 @@ private fun Clock(modifier: Modifier = Modifier) {
             delay(15_000)
         }
     }
+    val sleep = sleepEndsAt?.let { end ->
+        val minutes = ((end - now.time) / 60_000).coerceAtLeast(0)
+        "☾ ${if (minutes >= 60) "${minutes / 60} h ${"%02d".format(minutes % 60)}" else "$minutes min"}  ·  "
+    }.orEmpty()
     Text(
-        SimpleDateFormat("HH:mm", Locale.FRANCE).format(now),
+        sleep + SimpleDateFormat("HH:mm", Locale.FRANCE).format(now),
         modifier = modifier,
         color = TextSecondary,
         fontSize = 15.sp,
@@ -259,6 +299,9 @@ private fun Clock(modifier: Modifier = Modifier) {
 @Composable
 private fun <T> CatalogContent(
     catalog: Catalog<T>,
+    section: Section,
+    state: UiState,
+    onLongPressCategory: (Category) -> Unit,
     extraCategories: List<Category>,
     columns: Int,
     emptyText: String,
@@ -275,7 +318,13 @@ private fun <T> CatalogContent(
 ) {
     Column(Modifier.fillMaxSize()) {
         if (catalog.categories.isNotEmpty()) {
-            CategoryRow(extraCategories + catalog.categories, catalog.selectedId, onSelectCategory)
+            CategoryRow(
+                categories = extraCategories + catalog.categories,
+                selectedId = catalog.selectedId,
+                isLocked = { id -> state.isLocked(section, id) },
+                onSelect = onSelectCategory,
+                onLongPress = onLongPressCategory,
+            )
         }
         Toolbar(
             count = catalog.items.size.takeIf { !catalog.loading || it > 0 },
@@ -356,7 +405,13 @@ private fun Toolbar(
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-private fun CategoryRow(categories: List<Category>, selectedId: String?, onSelect: (String) -> Unit) {
+private fun CategoryRow(
+    categories: List<Category>,
+    selectedId: String?,
+    isLocked: (String) -> Boolean,
+    onSelect: (String) -> Unit,
+    onLongPress: (Category) -> Unit,
+) {
     LazyRow(
         modifier = Modifier.focusRestorer(),
         contentPadding = PaddingValues(horizontal = 48.dp, vertical = 12.dp),
@@ -364,9 +419,11 @@ private fun CategoryRow(categories: List<Category>, selectedId: String?, onSelec
     ) {
         itemsIndexed(categories, key = { i, c -> "${c.id}-$i" }) { _, category ->
             ChipButton(
-                label = category.name,
+                label = if (isLocked(category.id)) "🔒 ${category.name}" else category.name,
                 selected = category.id == selectedId,
                 onClick = { onSelect(category.id) },
+                // Appui long : masquer ou verrouiller la catégorie
+                onLongClick = { onLongPress(category) },
             )
         }
     }
@@ -414,92 +471,124 @@ private fun <T> CardGrid(
 @Composable
 private fun SettingsContent(state: UiState, vm: MainViewModel) {
     Row(
-        Modifier.fillMaxSize().padding(horizontal = 96.dp, vertical = 32.dp),
-        horizontalArrangement = Arrangement.spacedBy(64.dp),
+        Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(36.dp),
     ) {
-        // --- Compte ---
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // --- Compte et application ---
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SectionTitle("Compte")
             state.savedCredentials?.let {
-                Text(it.username, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Text(it.baseUrl, color = TextSecondary, fontSize = 14.sp)
+                Text(it.username, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text(it.baseUrl, color = TextSecondary, fontSize = 12.sp, maxLines = 1)
             }
             state.account?.let {
                 val exp = it.expiresAt?.let { s ->
                     "Expire le " + SimpleDateFormat("d MMMM yyyy", Locale.FRANCE).format(Date(s * 1000))
                 } ?: "Sans date d'expiration"
-                Text("Abonnement ${it.status.lowercase()} · $exp", color = TextSecondary, fontSize = 14.sp)
-                it.maxConnections?.let { m -> Text("Connexions simultanées : $m", color = TextSecondary, fontSize = 14.sp) }
+                Text(exp, color = TextSecondary, fontSize = 12.sp)
+                it.maxConnections?.let { m -> Text("Connexions simultanées : $m", color = TextSecondary, fontSize = 12.sp) }
             }
-            Box(Modifier.padding(top = 12.dp)) {
-                ActionButton("Se déconnecter", onClick = vm::logout)
-            }
-        }
+            SettingButton("Se déconnecter", onClick = vm::logout)
 
-        // --- Application ---
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SectionTitle("Application")
-            Text("Rabux TV · version ${vm.appVersion}", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text(
-                "Tri : sport FR en tête du direct, FR puis VOSTFR et dernières sorties pour les films et séries.",
-                color = TextSecondary,
-                fontSize = 12.sp,
-            )
-            Box(Modifier.padding(bottom = 4.dp)) {
-                ActionButton(
-                    if (state.preferFrench) "France en priorité : activé" else "France en priorité : désactivé",
-                    onClick = { vm.setPreferFrench(!state.preferFrench) },
-                )
-            }
-            Box(Modifier.padding(bottom = 12.dp)) {
-                ActionButton(
-                    if (state.libraryLoading) "Actualisation du catalogue…" else "↻ Actualiser tout le catalogue",
-                    onClick = { if (!state.libraryLoading) vm.reloadAll() },
-                )
-            }
-
+            SectionTitle("Application", Modifier.padding(top = 10.dp))
+            Text("Rabux TV · version ${vm.appVersion}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             when (val u = state.update) {
-                UpdateState.Checking -> Text("Recherche d'une mise à jour…", color = TextSecondary, fontSize = 14.sp)
+                UpdateState.Checking -> Text("Recherche d'une mise à jour…", color = TextSecondary, fontSize = 12.sp)
                 is UpdateState.Available -> {
-                    Text("La version ${u.info.version} est disponible.", fontSize = 14.sp)
-                    u.info.notes?.let { Text(it, color = TextSecondary, fontSize = 12.sp, maxLines = 6) }
-                    Box(Modifier.padding(top = 8.dp)) {
-                        ActionButton("Installer la ${u.info.version}", onClick = { vm.installUpdate(u.info) })
-                    }
+                    Text("La version ${u.info.version} est disponible.", fontSize = 12.sp)
+                    SettingButton("Installer la ${u.info.version}", onClick = { vm.installUpdate(u.info) })
                 }
                 is UpdateState.Downloading -> Text(
                     "Téléchargement… ${(u.progress * 100).toInt()} %",
                     color = TextSecondary,
-                    fontSize = 14.sp,
+                    fontSize = 12.sp,
                 )
                 is UpdateState.NeedsPermission -> {
                     Text(
                         if (u.opened) {
                             "Autorise « Rabux TV » à installer des applications, puis reviens ici."
                         } else {
-                            "Autorise « Rabux TV » à installer des applications inconnues dans les paramètres de la TV " +
-                                "(Applications › Accès spécial › Installer des applis inconnues)."
+                            "Autorise « Rabux TV » dans Paramètres › Applications › Accès spécial › Installer des applis inconnues."
                         },
                         color = TextSecondary,
-                        fontSize = 14.sp,
+                        fontSize = 12.sp,
                     )
-                    Box(Modifier.padding(top = 8.dp)) {
-                        ActionButton("Réessayer l'installation", onClick = { vm.installUpdate(u.info) })
-                    }
+                    SettingButton("Réessayer l'installation", onClick = { vm.installUpdate(u.info) })
                 }
                 else -> {
                     when (u) {
-                        UpdateState.UpToDate -> Text("L'app est à jour.", color = TextSecondary, fontSize = 14.sp)
-                        is UpdateState.Error -> Text(u.message, color = ErrorRed, fontSize = 14.sp)
+                        UpdateState.UpToDate -> Text("L'app est à jour.", color = TextSecondary, fontSize = 12.sp)
+                        is UpdateState.Error -> Text(u.message, color = ErrorRed, fontSize = 12.sp)
                         else -> Unit
                     }
-                    Box(Modifier.padding(top = 8.dp)) {
-                        ActionButton("Rechercher une mise à jour", onClick = { vm.checkForUpdate() })
-                    }
+                    SettingButton("Rechercher une mise à jour", onClick = { vm.checkForUpdate() })
                 }
             }
         }
+
+        // --- Préférences ---
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionTitle("Préférences")
+            SettingButton(
+                if (state.preferFrench) "France en priorité : activé" else "France en priorité : désactivé",
+                onClick = { vm.setPreferFrench(!state.preferFrench) },
+            )
+            SettingHint("Sport FR en tête du direct, FR puis VOSTFR et dernières sorties pour les films et séries.")
+            SettingButton(
+                if (state.previewEnabled) "Aperçu des chaînes : activé" else "Aperçu des chaînes : désactivé",
+                onClick = { vm.setPreviewEnabled(!state.previewEnabled) },
+            )
+            SettingHint("Vidéo muette dans la carte d'une chaîne après un instant. À désactiver si ton abonnement n'autorise qu'une connexion.")
+            SettingButton(
+                when (state.sleepMinutes) {
+                    0 -> "Minuteur de veille : désactivé"
+                    else -> "Minuteur de veille : ${state.sleepMinutes} min"
+                },
+                onClick = vm::cycleSleepTimer,
+            )
+            SettingHint("Chaque appui passe à 30, 60, 90, 120 min. L'app s'arrête à la fin, après un avertissement.")
+            SettingButton(
+                if (state.libraryLoading) "Actualisation du catalogue…" else "↻ Actualiser tout le catalogue",
+                onClick = { if (!state.libraryLoading) vm.reloadAll() },
+            )
+        }
+
+        // --- Contrôle parental ---
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SectionTitle("Contrôle parental")
+            Text(
+                if (state.hasPin) "Code parental activé" else "Aucun code parental",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (state.hasPin) {
+                SettingButton("Supprimer le code", onClick = { vm.requestPin(PinPurpose.RemovePin) })
+            } else {
+                SettingButton("Créer un code", onClick = { vm.requestPin(PinPurpose.Create()) })
+            }
+            SettingHint("Maintiens OK sur une pastille de catégorie pour la masquer ou la verrouiller avec le code.")
+            val hidden = state.hiddenCategories.size
+            val locked = state.lockedCategories.size
+            Text(
+                "$hidden masquée${if (hidden > 1) "s" else ""} · $locked verrouillée${if (locked > 1) "s" else ""}",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+            if (hidden + locked > 0) {
+                SettingButton("Tout réafficher", onClick = vm::resetCategories)
+            }
+        }
     }
+}
+
+@Composable
+private fun SettingButton(label: String, onClick: () -> Unit) {
+    ChipButton(label = label, selected = false, onClick = onClick)
+}
+
+@Composable
+private fun SettingHint(text: String) {
+    Text(text, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
 }
 
 /** Largeur des cartes dans les rangées horizontales (accueil, recherche). */

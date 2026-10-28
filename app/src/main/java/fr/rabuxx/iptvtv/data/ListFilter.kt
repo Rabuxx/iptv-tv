@@ -27,8 +27,16 @@ data class ListFilter(
 
 object ListPresenter {
 
-    /** Préfixes de fournisseur à ignorer pour le tri alphabétique : « FR | », « VOSTFR - », « [4K] »… */
-    private val PREFIX = Regex("^\\s*(\\[[^]]*]|\\|?[A-Z0-9]{2,8}\\|?)\\s*[|:\\-–]+\\s*")
+    private const val TAGS = "FR|VF|VFF|VFQ|VOSTFR|VOST|EN|MULTI|4K|UHD|FHD|HD|SD"
+
+    /**
+     * Préfixes de fournisseur ignorés pour le tri alphabétique : « FR | », « |VOSTFR| », « [4K] », « FR - 4K | »…
+     * Un mot isolé n'est retiré que s'il est suivi d'un séparateur : « En attendant Bojangles » reste intact.
+     */
+    private val PREFIX = Regex(
+        "^(?:\\s*(?:\\[[^\\]]*]\\s*[|:\\-–]*|\\|\\s*(?:$TAGS)\\s*\\|[|:\\-–]*|(?:$TAGS)\\s*[|:\\-–]+)\\s*)+",
+        RegexOption.IGNORE_CASE,
+    )
 
     private val collator: Collator = Collator.getInstance(Locale.FRANCE).apply { strength = Collator.PRIMARY }
 

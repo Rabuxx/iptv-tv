@@ -1,12 +1,15 @@
 name: Build APK
 
-# - push on main     -> APK built and available as workflow artifact
-# - push of a tag v* -> APK built with the tag version and published as a GitHub Release
-#                       (the app checks this Release to update itself)
+# - pull request (Dependabot...) -> tests + build, no release
+# - push on main                 -> tests + APK available as workflow artifact
+# - push of a tag v*             -> tests + APK built with the tag version and published as a GitHub Release
+#                                   (the app checks this Release to update itself)
+# If the tests fail, no APK and no Release are produced.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -23,6 +26,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: needed to write the release notes
 
       - uses: actions/setup-java@v4
         with:
@@ -45,10 +50,33 @@ jobs:
         if: env.KEYSTORE_BASE64 == ''
         run: echo "::warning::KEYSTORE_BASE64 secret missing - APK signed with a throwaway debug key, updates will fail."
 
-      - name: Build
+      - name: Unit tests
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - name: Lint
+        run: ./gradlew lintDebug --no-daemon
+        continue-on-error: true
+
+      - name: Lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
+
+      - name: Build
+        run: ./gradlew assembleRelease --no-daemon
 
       - name: Name the APK
         run: |
@@ -63,11 +91,21 @@ jobs:
           name: ${{ env.APK_FILE }}
           path: ${{ env.APK_FILE }}
 
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Commit messages since the previous tag: shown in the app ("What's new")
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_REF_NAME"; else RANGE="$GITHUB_REF_NAME"; fi
+          git log --no-merges --pretty='- %s' "$RANGE" | grep -v -i -E '^- (bump|merge)' > notes.md || true
+          [ -s notes.md ] || echo "- Améliorations et corrections" > notes.md
+          cat notes.md
+
       - name: Publish the Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
           files: |
             ${{ env.APK_FILE }}
             rabux-tv.apk
-          generate_release_notes: true

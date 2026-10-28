@@ -21,6 +21,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
@@ -85,9 +86,16 @@ fun TabPill(label: String, selected: Boolean, onFocused: () -> Unit, modifier: M
 
 /** Pastille cliquable (catégories, saisons) : grise au repos, blanche au focus. */
 @Composable
-fun ChipButton(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun ChipButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
+) {
     Surface(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier,
         shape = ClickableSurfaceDefaults.shape(CircleShape),
         colors = ClickableSurfaceDefaults.colors(
@@ -157,6 +165,10 @@ fun MediaCard(
     /** Appui long sur OK (ajout/retrait des favoris). */
     onLongClick: (() -> Unit)? = null,
     favorite: Boolean = false,
+    /** Prévenu quand la carte prend ou perd le focus (aperçu vidéo des chaînes). */
+    onFocusChange: ((Boolean) -> Unit)? = null,
+    /** Contenu affiché par-dessus l'image (vidéo d'aperçu). */
+    overlay: (@Composable BoxScope.() -> Unit)? = null,
 ) {
     var focused by remember { mutableStateOf(false) }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -167,7 +179,12 @@ fun MediaCard(
                 .fillMaxWidth()
                 .aspectRatio(aspectRatio)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-                .onFocusChanged { focused = it.isFocused },
+                .onFocusChanged {
+                    if (focused != it.isFocused) {
+                        focused = it.isFocused
+                        onFocusChange?.invoke(it.isFocused)
+                    }
+                },
             shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = Card,
@@ -195,6 +212,7 @@ fun MediaCard(
                     modifier = Modifier.fillMaxSize().padding(imagePadding),
                 )
             }
+            overlay?.invoke(this)
             if (favorite) {
                 Box(
                     Modifier
@@ -267,28 +285,6 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 
 /** Espacement horizontal standard des écrans (zone de sécurité TV). */
 val ScreenPadding = PaddingValues(horizontal = 48.dp)
-
-/** « 01:45:00 », « 105 min » ou « 6300 » (secondes) → « 1 h 45 ». */
-fun formatDuration(raw: String?): String? {
-    if (raw.isNullOrBlank()) return null
-    val minutes: Int = when {
-        raw.contains(":") -> {
-            val p = raw.split(":").mapNotNull { it.trim().toIntOrNull() }
-            when (p.size) {
-                3 -> p[0] * 60 + p[1]
-                2 -> p[0]
-                else -> return raw
-            }
-        }
-        raw.trim().endsWith("min") -> raw.filter { it.isDigit() }.toIntOrNull() ?: return raw
-        else -> raw.trim().toIntOrNull()?.let { if (it > 600) it / 60 else it } ?: return raw
-    }
-    if (minutes <= 0) return null
-    return if (minutes >= 60) "${minutes / 60} h ${"%02d".format(minutes % 60)}" else "$minutes min"
-}
-
-fun formatRating(raw: String?): String? =
-    raw?.toDoubleOrNull()?.takeIf { it > 0 }?.let { "★ " + "%.1f".format(it).replace('.', ',') }
 
 
 /** Champ de saisie adapté à la télécommande : OK ouvre le clavier, le cadre devient blanc au focus. */

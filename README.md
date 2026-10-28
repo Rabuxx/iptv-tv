@@ -2,7 +2,18 @@
 
 Lecteur IPTV pour Android TV, compatible **Xtream Codes** (serveur + identifiant + mot de passe), avec une interface inspirée de l'Apple TV.
 
-## Fonctionnalités (v0.5)
+## Fonctionnalités (v0.6)
+
+**Nouveautés v0.6**
+- **Guide TV** : programme en cours (avec avancement) sur chaque chaîne, programme suivant dans le bandeau du lecteur
+- **Aperçu au focus** : la vidéo de la chaîne se lance, muette, dans sa carte après un instant (désactivable)
+- **Sport ce soir** : pastille « ⚽ » dans Direct, matchs en cours et à venir sur les chaînes sport FR
+- **Zapping** : touches 0-9 pour un numéro, ← chaîne précédente, → liste des chaînes avec leur programme
+- **Accueil Android TV** : films et séries en cours dans la rangée « À suivre » du lanceur (selon le modèle)
+- **Minuteur de veille** (Réglages) : 30 à 120 min, avertissement une minute avant l'arrêt
+- **Contrôle parental** : appui long sur une pastille pour masquer ou verrouiller une catégorie, code à 4 chiffres
+- **Quoi de neuf** : après une mise à jour, la liste des nouveautés s'affiche une fois
+- Nouveau logo et nouvelle bannière
 
 **Navigation**
 - **Tri et filtre** des films et séries : Récents, Note ou A → Z, et note minimale (≥ 6, ≥ 7, ≥ 8), mémorisés
@@ -65,6 +76,15 @@ app/src/main/java/fr/rabuxx/iptvtv/
 ```
 
 ---
+
+## Qualité (CI)
+
+- **Tests unitaires** (`app/src/test`) : tri FR/VOSTFR/sport, filtres, nettoyage des titres, versions, guide TV, formatage.
+  Lancer en local : `./gradlew testDebugUnitTest`
+- La CI exécute les tests à chaque push et pull request ; **si un test échoue, aucun APK ni Release n'est publié**.
+- Rapport **lint** publié en artefact du workflow (non bloquant).
+- **Dependabot** propose chaque semaine les mises à jour des dépendances (pull requests testées par la CI).
+- Les **notes de version** sont générées à partir des messages de commit depuis le tag précédent, puis affichées dans l'app.
 
 ## Mettre en place GitHub (CI + mises à jour) — à faire une fois
 
@@ -138,6 +158,17 @@ Le workflow compile l'APK et le publie dans *Releases*. Pour les versions suivan
 Au premier essai, Android TV demande d'autoriser « Rabux TV » à installer des applications : accepte, reviens dans l'app et relance l'installation.
 
 ---
+
+## Installer chez quelqu'un d'autre
+
+Lien toujours à jour vers la dernière version :
+**https://github.com/Rabuxx/iptv-tv/releases/latest/download/rabux-tv.apk**
+
+- **Avec Downloader** (Play Store de la TV) : saisir ce lien, autoriser Downloader à installer des applis, installer.
+- **Avec une clé USB** : copier l'APK sur la clé, installer *X-plore File Manager* ou *File Commander* sur la TV, ouvrir l'APK depuis la clé.
+- Si Play Protect s'affiche : *Plus de détails › Installer quand même*.
+
+Chacun saisit ses propres identifiants Xtream. Les mises à jour arrivent ensuite automatiquement dans Réglages.
 
 ## Compiler et installer à la main (ADB)
 

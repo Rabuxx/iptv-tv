@@ -60,11 +60,26 @@ class Updater(private val context: Context) {
                 ?.optString("browser_download_url")
         } ?: throw IOException("La dernière release ne contient pas d'APK")
 
-        if (isNewer(version, currentVersion)) {
+        if (Versions.isNewer(version, currentVersion)) {
             UpdateInfo(version = version, apkUrl = apk, notes = json.optString("body").takeIf { it.isNotBlank() })
         } else {
             null
         }
+    }
+
+    /** Notes de la Release d'une version donnée (« Quoi de neuf » après une mise à jour). */
+    suspend fun notesFor(version: String): String? = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/tags/v$version")
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", USER_AGENT)
+            .build()
+        runCatching {
+            http.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                JSONObject(resp.body?.string().orEmpty()).optString("body").trim().takeIf { it.isNotBlank() }
+            }
+        }.getOrNull()
     }
 
     /** Télécharge l'APK dans le cache de l'app. */
@@ -122,19 +137,5 @@ class Updater(private val context: Context) {
             .setDataAndType(uri, "application/vnd.android.package-archive")
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
-    }
-
-    companion object {
-        /** « 0.10.1 » > « 0.9.3 », comparaison numérique segment par segment. */
-        fun isNewer(candidate: String, current: String): Boolean {
-            val a = candidate.split('.', '-').map { it.toIntOrNull() ?: 0 }
-            val b = current.split('.', '-').map { it.toIntOrNull() ?: 0 }
-            for (i in 0 until maxOf(a.size, b.size)) {
-                val x = a.getOrElse(i) { 0 }
-                val y = b.getOrElse(i) { 0 }
-                if (x != y) return x > y
-            }
-            return false
-        }
     }
 }

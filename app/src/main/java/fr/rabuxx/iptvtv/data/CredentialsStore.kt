@@ -48,6 +48,43 @@ class CredentialsStore(context: Context) {
         get() = prefs.getBoolean("prefer_french", true)
         set(value) = prefs.edit().putBoolean("prefer_french", value).apply()
 
+    // ---- Catégories masquées / verrouillées (clés « Live:12 », « Movies:34 »…) ----
+
+    var hiddenCategories: Set<String>
+        get() = prefs.getStringSet("hidden_categories", emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit().putStringSet("hidden_categories", value).apply()
+
+    var lockedCategories: Set<String>
+        get() = prefs.getStringSet("locked_categories", emptySet()).orEmpty().toSet()
+        set(value) = prefs.edit().putStringSet("locked_categories", value).apply()
+
+    // ---- Code parental (seule l'empreinte SHA-256 est stockée) ----
+
+    val hasPin: Boolean get() = prefs.getString("pin_hash", null) != null
+
+    fun setPin(pin: String?) {
+        val edit = prefs.edit()
+        if (pin == null) edit.remove("pin_hash") else edit.putString("pin_hash", hash(pin))
+        edit.apply()
+    }
+
+    fun checkPin(pin: String): Boolean = prefs.getString("pin_hash", null) == hash(pin)
+
+    private fun hash(pin: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest("rabux-tv:$pin".toByteArray())
+            .joinToString("") { "%02x".format(it) }
+
+    /** Aperçu vidéo des chaînes au focus dans la grille Direct. */
+    var previewEnabled: Boolean
+        get() = prefs.getBoolean("preview_enabled", true)
+        set(value) = prefs.edit().putBoolean("preview_enabled", value).apply()
+
+    /** Dernière version lancée, pour afficher « Quoi de neuf » une fois après une mise à jour. */
+    var lastSeenVersion: String?
+        get() = prefs.getString("last_seen_version", null)
+        set(value) = prefs.edit().putString("last_seen_version", value).apply()
+
     /** Tri et note minimale choisis pour les films ou les séries. */
     fun listFilter(section: Section) = ListFilter(
         sort = prefs.getString("sort_${section.name}", null)
@@ -70,6 +107,8 @@ class CredentialsStore(context: Context) {
     // ---- Reprise de lecture (films / épisodes) ----
 
     fun position(key: String): Long = positions.getLong("$key:pos", 0L)
+
+    fun duration(key: String): Long = positions.getLong("$key:dur", 0L)
 
     /** Avancement entre 0 et 1, ou 0 si jamais lancé. */
     fun progress(key: String): Float {

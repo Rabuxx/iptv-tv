@@ -20,6 +20,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.LocalContentColor
+import androidx.tv.material3.Surface
+import fr.rabuxx.iptvtv.data.EpgProgram
+import fr.rabuxx.iptvtv.data.nowPlaying
+import fr.rabuxx.iptvtv.data.progress
+import fr.rabuxx.iptvtv.data.upNext
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -78,7 +88,7 @@ import java.util.Locale
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun rememberIptvPlayer(): ExoPlayer {
+internal fun rememberIptvPlayer(): ExoPlayer {
     val context = LocalContext.current
     return remember {
         val http = DefaultHttpDataSource.Factory()
@@ -159,7 +169,8 @@ private const val LIVE_MAX_RETRIES = 5
 
 /**
  * Lecteur TV en direct.
- * ↑ / ↓ (ou CH+ / CH−) : zapper · OK : afficher le bandeau · Retour : revenir.
+ * ↑ / ↓ (ou CH+ / CH−) : zapper · ← : chaîne précédente · → : liste des chaînes
+ * 0-9 : aller à un numéro de chaîne · OK : bandeau d'infos · Retour : revenir.
  * Chaque chaîne est lue en MPEG-TS ; en cas d'échec, nouvel essai en HLS, puis reconnexions automatiques.
  */
 @OptIn(UnstableApi::class)
@@ -168,10 +179,14 @@ fun LivePlayerScreen(
     channels: List<Channel>,
     startIndex: Int,
     urlFor: (Channel, String) -> String,
+    epg: Map<String, List<EpgProgram>>,
+    onRequestEpg: (Channel) -> Unit,
     onZapped: (Int) -> Unit,
+    onJumpToNumber: (String) -> Boolean,
 ) {
     val player = rememberIptvPlayer()
     var index by remember { mutableIntStateOf(startIndex.coerceIn(channels.indices)) }
+    var previousIndex by remember { mutableStateOf<Int?>(null) }
     var useHls by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(true) }
@@ -179,6 +194,11 @@ fun LivePlayerScreen(
     var retries by remember { mutableIntStateOf(0) }
     var pendingRetry by remember { mutableStateOf(false) }
     var retryTick by remember { mutableIntStateOf(0) }
+    var digits by remember { mutableStateOf("") }
+    var digitsError by remember { mutableStateOf<String?>(null) }
+    var listOpen by remember { mutableStateOf(false) }
+    // Rafraîchit l'avancement des programmes affichés
+    var clockTick by remember { mutableIntStateOf(0) }
 
     DisposableEffect(Unit) {
         fun scheduleRetry() {
@@ -218,6 +238,17 @@ fun LivePlayerScreen(
     }
 
     val channel = channels[index]
+    val programs = epg[channel.streamId].orEmpty()
+    val nowSec = remember(clockTick, index) { System.currentTimeMillis() / 1000 }
+    val current = programs.nowPlaying(nowSec)
+    val next = programs.upNext(nowSec)
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(30_000)
+            clockTick++
+        }
+    }
 
     LaunchedEffect(pendingRetry) {
         if (pendingRetry) {
@@ -238,7 +269,12 @@ fun LivePlayerScreen(
         player.prepare()
     }
 
-    LaunchedEffect(index) { onZapped(index) }
+    LaunchedEffect(index) {
+        onZapped(index)
+        onRequestEpg(channel)
+    }
+    // Le programme en cours vient de se terminer : on recharge le guide
+    LaunchedEffect(clockTick) { if (programs.isNotEmpty() && current == null) onRequestEpg(channel) }
 
     LaunchedEffect(index, showInfo) {
         if (showInfo) {
@@ -247,21 +283,68 @@ fun LivePlayerScreen(
         }
     }
 
-    fun zap(delta: Int) {
-        if (channels.size < 2) return
-        index = (index + delta).mod(channels.size)
+    fun goTo(newIndex: Int) {
+        if (newIndex == index || newIndex !in channels.indices) return
+        previousIndex = index
+        index = newIndex
         useHls = false
         retries = 0
         pendingRetry = false
         showInfo = true
     }
 
+    fun zap(delta: Int) {
+        if (channels.size < 2) return
+        goTo((index + delta).mod(channels.size))
+    }
+
+    // Saisie d'un numéro : on attend la fin de la frappe, puis on cherche dans la liste, sinon partout
+    LaunchedEffect(digits) {
+        if (digits.isEmpty()) return@LaunchedEffect
+        delay(if (digits.length >= 4) 300 else 1_800)
+        val entered = digits
+        digits = ""
+        val wanted = entered.trimStart('0').ifEmpty { "0" }
+        val local = channels.indexOfFirst { it.number.trimStart('0').ifEmpty { "0" } == wanted }
+        when {
+            local >= 0 -> goTo(local)
+            onJumpToNumber(entered) -> Unit // l'écran est recréé sur la liste complète des chaînes
+            else -> {
+                digitsError = "Chaîne $entered introuvable"
+                delay(2_000)
+                digitsError = null
+            }
+        }
+    }
+
     val focus = remember { FocusRequester() }
+
+    BackHandler(enabled = listOpen) {
+        listOpen = false
+        runCatching { focus.requestFocus() }
+    }
+    BackHandler(enabled = !listOpen && digits.isNotEmpty()) { digits = "" }
+
     KeyCatcher(focus, onKey = { ev ->
-        when (ev.key) {
-            Key.DirectionUp, Key.ChannelDown -> { zap(-1); true }
-            Key.DirectionDown, Key.ChannelUp -> { zap(+1); true }
-            Key.DirectionCenter, Key.Enter, Key.NumPadEnter, Key.Info -> { showInfo = !showInfo; true }
+        val digit = digitOf(ev.key)
+        when {
+            // Liste ouverte : les flèches servent à y naviguer
+            listOpen -> false
+            digit != null -> {
+                if (digits.length < 4) digits += digit
+                true
+            }
+            ev.key == Key.DirectionUp || ev.key == Key.ChannelDown -> { zap(-1); true }
+            ev.key == Key.DirectionDown || ev.key == Key.ChannelUp -> { zap(+1); true }
+            ev.key == Key.DirectionLeft || ev.key == Key.LastChannel -> {
+                previousIndex?.let { goTo(it) }
+                true
+            }
+            ev.key == Key.DirectionRight || ev.key == Key.Guide -> { listOpen = true; true }
+            ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter || ev.key == Key.Info -> {
+                showInfo = !showInfo
+                true
+            }
             else -> false
         }
     }) {
@@ -274,15 +357,31 @@ fun LivePlayerScreen(
                 buffering -> StatusText("Chargement…", Modifier.align(Alignment.Center))
             }
 
+            // Numéro en cours de saisie
+            val digitsText = if (digits.isNotEmpty()) digits + "_" else digitsError
+            if (digitsText != null) {
+                Text(
+                    digitsText,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 32.dp, end = 48.dp)
+                        .background(Glass, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    fontSize = if (digits.isNotEmpty()) 34.sp else 16.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+
             AnimatedVisibility(
-                visible = showInfo,
+                visible = showInfo && !listOpen,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomStart),
             ) {
                 Row(
                     Modifier
-                        .padding(start = 48.dp, bottom = 36.dp)
+                        .padding(start = 48.dp, end = 48.dp, bottom = 32.dp)
+                        .widthIn(max = 620.dp)
                         .background(Glass, RoundedCornerShape(18.dp))
                         .padding(horizontal = 20.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -301,20 +400,143 @@ fun LivePlayerScreen(
                             )
                         }
                     }
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         Text(
-                            listOfNotNull(channel.number.takeIf { it.isNotBlank() }, "${index + 1} / ${channels.size}").joinToString("  ·  "),
+                            listOfNotNull(channel.number.takeIf { it.isNotBlank() }, channel.name).joinToString("  ·  "),
                             color = TextSecondary,
                             fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Text(channel.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text("↑ ↓ pour zapper", color = TextSecondary, fontSize = 11.sp)
+                        Text(
+                            current?.title ?: channel.name,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (current != null) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("${hhmm(current.startTs)} – ${hhmm(current.stopTs)}", color = TextSecondary, fontSize = 12.sp)
+                                Box(Modifier.size(width = 120.dp, height = 4.dp).background(Color(0x4DFFFFFF), CircleShape)) {
+                                    Box(Modifier.fillMaxWidth(current.progress(nowSec)).fillMaxHeight().background(Color.White, CircleShape))
+                                }
+                            }
+                        }
+                        if (next != null) {
+                            Text(
+                                "Ensuite · ${hhmm(next.startTs)}  ${next.title}",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text("↑↓ zapper  ·  ← précédente  ·  → liste  ·  0-9 numéro", color = Color(0x80FFFFFF), fontSize = 10.sp)
+                    }
+                }
+            }
+
+            if (listOpen) {
+                ChannelListPanel(
+                    channels = channels,
+                    currentIndex = index,
+                    epg = epg,
+                    nowSec = nowSec,
+                    onRequestEpg = onRequestEpg,
+                    onPick = { i ->
+                        listOpen = false
+                        goTo(i)
+                        runCatching { focus.requestFocus() }
+                    },
+                    modifier = Modifier.align(Alignment.CenterStart),
+                )
+            }
+        }
+    }
+}
+
+/** Liste des chaînes en surimpression, à gauche, avec le programme en cours. */
+@Composable
+private fun ChannelListPanel(
+    channels: List<Channel>,
+    currentIndex: Int,
+    epg: Map<String, List<EpgProgram>>,
+    nowSec: Long,
+    onRequestEpg: (Channel) -> Unit,
+    onPick: (Int) -> Unit,
+    modifier: Modifier,
+) {
+    val listState = rememberLazyListState()
+    val currentFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        listState.scrollToItem((currentIndex - 3).coerceAtLeast(0))
+        withFrameNanos { }
+        runCatching { currentFocus.requestFocus() }
+    }
+    Column(
+        modifier
+            .fillMaxHeight()
+            .width(380.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xF2000000), Color(0xB3000000))))
+            .padding(top = 24.dp),
+    ) {
+        Text("Chaînes", modifier = Modifier.padding(start = 28.dp, bottom = 8.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        LazyColumn(
+            state = listState,
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            itemsIndexed(channels, key = { i, c -> "${c.streamId}-$i" }) { i, ch ->
+                LaunchedEffect(ch.streamId) { onRequestEpg(ch) }
+                val now = epg[ch.streamId]?.nowPlaying(nowSec)
+                Surface(
+                    onClick = { onPick(i) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (i == currentIndex) Modifier.focusRequester(currentFocus) else Modifier),
+                    shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(10.dp)),
+                    colors = ClickableSurfaceDefaults.colors(
+                        containerColor = if (i == currentIndex) Color(0x33FFFFFF) else Color.Transparent,
+                        contentColor = TextPrimary,
+                        focusedContainerColor = FocusFill,
+                        focusedContentColor = FocusText,
+                        pressedContainerColor = FocusFill,
+                        pressedContentColor = FocusText,
+                    ),
+                    scale = ClickableSurfaceDefaults.scale(focusedScale = 1.02f),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(ch.number, modifier = Modifier.width(34.dp), fontSize = 12.sp, color = LocalContentColor.current.copy(alpha = 0.6f))
+                        Box(Modifier.size(width = 44.dp, height = 26.dp), contentAlignment = Alignment.Center) {
+                            if (ch.icon != null) {
+                                AsyncImage(model = ch.icon, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(ch.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            if (now != null) {
+                                Text(
+                                    now.title,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = LocalContentColor.current.copy(alpha = 0.65f),
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+private fun hhmm(ts: Long) = java.text.SimpleDateFormat("HH:mm", Locale.FRANCE).format(java.util.Date(ts * 1000))
 
 // ============================== Films / épisodes / replay ==============================
 
