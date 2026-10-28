@@ -40,6 +40,7 @@ import fr.rabuxx.iptvtv.UpdateState
 import fr.rabuxx.iptvtv.data.Category
 import fr.rabuxx.iptvtv.data.FAVORITES_CATEGORY
 import fr.rabuxx.iptvtv.data.LATEST_CATEGORY
+import fr.rabuxx.iptvtv.data.ListFilter
 import fr.rabuxx.iptvtv.data.Ranking
 import fr.rabuxx.iptvtv.data.REPLAY_CATEGORY
 import fr.rabuxx.iptvtv.data.Section
@@ -104,6 +105,8 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                         onRestored = onRestored,
                         onSelectCategory = { vm.selectCategory(Section.Live, it) },
                         onRetry = { vm.retry(Section.Live) },
+                        onReload = { vm.reload(Section.Live) },
+                        itemsLabel = { n -> if (n > 1) "$n chaînes" else "$n chaîne" },
                     ) { index, channel, requester ->
                         MediaCard(
                             title = channel.name,
@@ -134,12 +137,17 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                     emptyText = when (state.movies.selectedId) {
                         FAVORITES_CATEGORY -> "Aucun film favori.\nMaintiens OK sur une affiche pour l'ajouter."
                         LATEST_CATEGORY -> if (state.libraryLoading || state.library == null) "Chargement des dernières sorties…" else "Aucune sortie récente"
-                        else -> "Aucun film dans cette catégorie"
+                        else -> if (state.movieFilter.minRating > 0) "Aucun film noté ${state.movieFilter.ratingLabel} ici" else "Aucun film dans cette catégorie"
                     },
                     restore = restoreHere,
                     onRestored = onRestored,
                     onSelectCategory = { vm.selectCategory(Section.Movies, it) },
                     onRetry = { vm.retry(Section.Movies) },
+                    onReload = { vm.reload(Section.Movies) },
+                    itemsLabel = { n -> if (n > 1) "$n films" else "$n film" },
+                    filter = state.movieFilter,
+                    onCycleSort = { vm.cycleSort(Section.Movies) },
+                    onCycleRating = { vm.cycleMinRating(Section.Movies) },
                 ) { index, movie, requester ->
                     MediaCard(
                         title = movie.name,
@@ -160,12 +168,17 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                     emptyText = when (state.series.selectedId) {
                         FAVORITES_CATEGORY -> "Aucune série favorite.\nMaintiens OK sur une affiche pour l'ajouter."
                         LATEST_CATEGORY -> if (state.libraryLoading || state.library == null) "Chargement des dernières sorties…" else "Aucune série récente"
-                        else -> "Aucune série dans cette catégorie"
+                        else -> if (state.seriesFilter.minRating > 0) "Aucune série notée ${state.seriesFilter.ratingLabel} ici" else "Aucune série dans cette catégorie"
                     },
                     restore = restoreHere,
                     onRestored = onRestored,
                     onSelectCategory = { vm.selectCategory(Section.Series, it) },
                     onRetry = { vm.retry(Section.Series) },
+                    onReload = { vm.reload(Section.Series) },
+                    itemsLabel = { n -> if (n > 1) "$n séries" else "$n série" },
+                    filter = state.seriesFilter,
+                    onCycleSort = { vm.cycleSort(Section.Series) },
+                    onCycleRating = { vm.cycleMinRating(Section.Series) },
                 ) { index, series, requester ->
                     MediaCard(
                         title = series.name,
@@ -253,12 +266,26 @@ private fun <T> CatalogContent(
     onRestored: (Boolean) -> Unit,
     onSelectCategory: (String) -> Unit,
     onRetry: () -> Unit,
+    onReload: () -> Unit,
+    itemsLabel: (Int) -> String,
+    filter: ListFilter? = null,
+    onCycleSort: () -> Unit = {},
+    onCycleRating: () -> Unit = {},
     item: @Composable (index: Int, item: T, focusRequester: FocusRequester?) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         if (catalog.categories.isNotEmpty()) {
             CategoryRow(extraCategories + catalog.categories, catalog.selectedId, onSelectCategory)
         }
+        Toolbar(
+            count = catalog.items.size.takeIf { !catalog.loading || it > 0 },
+            itemsLabel = itemsLabel,
+            filter = filter,
+            refreshing = catalog.refreshing,
+            onCycleSort = onCycleSort,
+            onCycleRating = onCycleRating,
+            onReload = onReload,
+        )
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when {
                 catalog.loading && catalog.items.isEmpty() -> {
@@ -276,6 +303,54 @@ private fun <T> CatalogContent(
                 else -> CardGrid(catalog, columns, restore, onRestored, item)
             }
         }
+    }
+}
+
+/** Tri, note minimale, nombre d'éléments et bouton d'actualisation, au-dessus de la grille. */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun Toolbar(
+    count: Int?,
+    itemsLabel: (Int) -> String,
+    filter: ListFilter?,
+    refreshing: Boolean,
+    onCycleSort: () -> Unit,
+    onCycleRating: () -> Unit,
+    onReload: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 48.dp)
+            .padding(bottom = 4.dp)
+            .focusRestorer()
+            .focusGroup(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (filter != null) {
+            ChipButton(label = "Tri : ${filter.sort.label}", selected = false, onClick = onCycleSort)
+            ChipButton(
+                label = "Note : ${filter.ratingLabel}",
+                selected = filter.minRating > 0,
+                onClick = onCycleRating,
+            )
+        }
+        Box(Modifier.weight(1f)) {
+            if (count != null) {
+                Text(
+                    itemsLabel(count),
+                    modifier = Modifier.padding(start = 8.dp),
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+        ChipButton(
+            label = if (refreshing) "Actualisation…" else "↻ Actualiser",
+            selected = refreshing,
+            onClick = { if (!refreshing) onReload() },
+        )
     }
 }
 
@@ -370,10 +445,16 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
                 color = TextSecondary,
                 fontSize = 12.sp,
             )
-            Box(Modifier.padding(bottom = 12.dp)) {
+            Box(Modifier.padding(bottom = 4.dp)) {
                 ActionButton(
                     if (state.preferFrench) "France en priorité : activé" else "France en priorité : désactivé",
                     onClick = { vm.setPreferFrench(!state.preferFrench) },
+                )
+            }
+            Box(Modifier.padding(bottom = 12.dp)) {
+                ActionButton(
+                    if (state.libraryLoading) "Actualisation du catalogue…" else "↻ Actualiser tout le catalogue",
+                    onClick = { if (!state.libraryLoading) vm.reloadAll() },
                 )
             }
 

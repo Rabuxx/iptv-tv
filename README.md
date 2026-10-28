@@ -2,9 +2,11 @@
 
 Lecteur IPTV pour Android TV, compatible **Xtream Codes** (serveur + identifiant + mot de passe), avec une interface inspirée de l'Apple TV.
 
-## Fonctionnalités (v0.4)
+## Fonctionnalités (v0.5)
 
 **Navigation**
+- **Tri et filtre** des films et séries : Récents, Note ou A → Z, et note minimale (≥ 6, ≥ 7, ≥ 8), mémorisés
+- **↻ Actualiser** dans Direct, Films et Séries (et « Actualiser tout le catalogue » dans Réglages) : recharge depuis le serveur sans passer par le cache
 - **Tri France en priorité** (désactivable dans Réglages) : sport FR en tête du direct ; catégories FR puis VOSTFR pour les films et séries, les plus récents d'abord ; pastille « ✦ Dernières sorties » ouverte par défaut
 - Onglets façon tvOS : Accueil · Direct · Films · Séries · Rechercher · Réglages, horloge en haut à droite
 - **Accueil** : rangées « À suivre », chaînes favorites, chaînes récentes, films et séries favoris, films ajoutés récemment, séries mises à jour

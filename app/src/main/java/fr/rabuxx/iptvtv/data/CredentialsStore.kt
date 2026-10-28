@@ -48,6 +48,21 @@ class CredentialsStore(context: Context) {
         get() = prefs.getBoolean("prefer_french", true)
         set(value) = prefs.edit().putBoolean("prefer_french", value).apply()
 
+    /** Tri et note minimale choisis pour les films ou les séries. */
+    fun listFilter(section: Section) = ListFilter(
+        sort = prefs.getString("sort_${section.name}", null)
+            ?.let { name -> SortMode.entries.firstOrNull { it.name == name } }
+            ?: SortMode.Recent,
+        minRating = prefs.getInt("min_rating_${section.name}", 0),
+    )
+
+    fun saveListFilter(section: Section, filter: ListFilter) {
+        prefs.edit()
+            .putString("sort_${section.name}", filter.sort.name)
+            .putInt("min_rating_${section.name}", filter.minRating)
+            .apply()
+    }
+
     private companion object {
         const val DEFAULTS_VERSION = 2
     }

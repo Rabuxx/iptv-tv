@@ -17,6 +17,8 @@ import fr.rabuxx.iptvtv.data.HistoryItem
 import fr.rabuxx.iptvtv.data.LATEST_CATEGORY
 import fr.rabuxx.iptvtv.data.Library
 import fr.rabuxx.iptvtv.data.LibraryStore
+import fr.rabuxx.iptvtv.data.ListFilter
+import fr.rabuxx.iptvtv.data.ListPresenter
 import fr.rabuxx.iptvtv.data.Movie
 import fr.rabuxx.iptvtv.data.MovieInfo
 import fr.rabuxx.iptvtv.data.REPLAY_CATEGORY
@@ -91,6 +93,8 @@ data class Catalog<T>(
     val loaded: Boolean = false,
     /** Dernier élément ouvert, pour y replacer le focus au retour. */
     val focusIndex: Int? = null,
+    /** Bouton « Actualiser » en cours. */
+    val refreshing: Boolean = false,
 )
 
 data class Detail<T>(
@@ -144,6 +148,8 @@ data class UiState(
     val update: UpdateState = UpdateState.Idle,
     /** Catégories FR / VOSTFR en tête, dernières sorties par défaut. */
     val preferFrench: Boolean = true,
+    val movieFilter: ListFilter = ListFilter(),
+    val seriesFilter: ListFilter = ListFilter(),
     /** Section dont le contenu doit reprendre le focus (retour depuis une fiche ou un lecteur). */
     val restoreFocus: Section? = null,
 ) {
@@ -177,6 +183,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             history = libraryStore.history(),
             recentChannels = libraryStore.recentChannels(),
             preferFrench = store.preferFrench,
+            movieFilter = store.listFilter(Section.Movies),
+            seriesFilter = store.listFilter(Section.Series),
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -190,7 +198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         write = { s, c -> s.copy(live = c) },
         loadCategories = { c, cached -> c.liveCategories(cached) },
         loadItems = { c, id, cached -> c.liveStreams(id, cached) },
-        sortItems = { it },
+        present = { it },
         defaultCategory = null,
         virtual = { id ->
             when (id) {
@@ -206,8 +214,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         write = { s, c -> s.copy(movies = c) },
         loadCategories = { c, cached -> c.movieCategories(cached) },
         loadItems = { c, id, cached -> c.movies(id, cached) },
-        // Les plus récents d'abord dans chaque catégorie
-        sortItems = { list -> if (_state.value.preferFrench) list.sortedByDescending { it.added } else list },
+        present = { list ->
+            ListPresenter.apply(_state.value.movieFilter, list, date = { it.added }, rating = { it.rating }, name = { it.name })
+        },
         defaultCategory = LATEST_CATEGORY,
         virtual = { id ->
             when (id) {
@@ -223,7 +232,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         write = { s, c -> s.copy(series = c) },
         loadCategories = { c, cached -> c.seriesCategories(cached) },
         loadItems = { c, id, cached -> c.series(id, cached) },
-        sortItems = { list -> if (_state.value.preferFrench) list.sortedByDescending { it.lastModified } else list },
+        present = { list ->
+            ListPresenter.apply(_state.value.seriesFilter, list, date = { it.lastModified }, rating = { it.rating }, name = { it.name })
+        },
         defaultCategory = LATEST_CATEGORY,
         virtual = { id ->
             when (id) {
@@ -593,6 +604,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(recentMovies = movies, recentSeries = series) }
     }
 
+    // ---------- Tri, filtre et actualisation ----------
+
+    fun cycleSort(section: Section) = updateFilter(section) { it.copy(sort = it.sort.next()) }
+
+    fun cycleMinRating(section: Section) = updateFilter(section) { f ->
+        val steps = ListFilter.RATING_STEPS
+        f.copy(minRating = steps[(steps.indexOf(f.minRating) + 1).mod(steps.size)])
+    }
+
+    private fun updateFilter(section: Section, change: (ListFilter) -> ListFilter) {
+        when (section) {
+            Section.Movies -> {
+                val f = change(_state.value.movieFilter)
+                store.saveListFilter(section, f)
+                _state.update { it.copy(movieFilter = f) }
+                moviesHandle.applyPresentation()
+            }
+            Section.Series -> {
+                val f = change(_state.value.seriesFilter)
+                store.saveListFilter(section, f)
+                _state.update { it.copy(seriesFilter = f) }
+                seriesHandle.applyPresentation()
+            }
+            else -> Unit
+        }
+    }
+
+    /** Bouton « Actualiser » d'une section : contenu de la section + catalogue complet (accueil, recherche). */
+    fun reload(section: Section) {
+        handle(section)?.reload()
+        ensureLibrary(force = true)
+    }
+
+    /** Réglages › Actualiser tout le catalogue. */
+    fun reloadAll() {
+        handles.forEach { if (it.isLoaded) it.reload() }
+        ensureLibrary(force = true)
+    }
+
     fun setPreferFrench(enabled: Boolean) {
         store.preferFrench = enabled
         _state.update { it.copy(preferFrench = enabled) }
@@ -707,8 +757,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         private val write: (UiState, Catalog<T>) -> UiState,
         private val loadCategories: suspend (XtreamClient, Boolean) -> List<Category>?,
         private val loadItems: suspend (XtreamClient, String, Boolean) -> List<T>?,
-        /** Tri appliqué aux éléments d'une vraie catégorie (récents d'abord pour films et séries). */
-        private val sortItems: (List<T>) -> List<T>,
+        /** Tri et filtre appliqués à l'affichage (réglages Tri / Note des films et séries). */
+        private val present: (List<T>) -> List<T>,
         /** Catégorie ouverte par défaut (null : la première après tri). */
         private val defaultCategory: String?,
         /** Contenu des catégories virtuelles (favoris, replay, dernières sorties), null pour une vraie catégorie. */
@@ -720,6 +770,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         /** Catégories dans l'ordre du fournisseur, pour pouvoir re-trier si le réglage change. */
         private var rawCategories: List<Category> = emptyList()
 
+        /** Éléments de la catégorie affichée, avant tri et filtre. */
+        private var rawItems: List<T> = emptyList()
+
         private fun ranked(categories: List<Category>): List<Category> =
             if (_state.value.preferFrench) Ranking.sortCategories(section, categories) else categories
 
@@ -729,6 +782,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Les dernières sorties et l'accueil dépendent des catégories FR / VOSTFR
             refreshVirtual()
             viewModelScope.launch { recomputeRecents() }
+        }
+
+        /** Remplace les éléments affichés (si la catégorie [id] est toujours sélectionnée). */
+        private fun showItems(id: String, items: List<T>, resetFocus: Boolean = false) {
+            if (current().selectedId != id) return
+            rawItems = items
+            val shown = present(items)
+            mutate {
+                it.copy(
+                    items = shown,
+                    loading = false,
+                    focusIndex = if (resetFocus) null else it.focusIndex?.takeIf { i -> i in shown.indices },
+                )
+            }
         }
 
         fun applyRanking() {
@@ -743,7 +810,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+        /** Le réglage Tri / Note a changé : on réapplique sur la liste déjà chargée, sans réseau. */
+        fun applyPresentation() {
+            val id = current().selectedId ?: return
+            showItems(id, rawItems, resetFocus = true)
+        }
+
         private fun current() = read(_state.value)
+
+        val isLoaded: Boolean get() = current().loaded
 
         private fun mutate(f: (Catalog<T>) -> Catalog<T>) =
             _state.update { s -> write(s, f(read(s))) }
@@ -796,26 +871,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             store.saveLastCategoryId(section, id)
 
             virtual(id)?.let { items ->
-                mutate { it.copy(selectedId = id, items = items, loading = false, error = null, focusIndex = null) }
+                mutate { it.copy(selectedId = id, error = null) }
+                showItems(id, items, resetFocus = true)
                 return
             }
 
             val c = client ?: return
+            rawItems = emptyList()
             mutate { it.copy(selectedId = id, items = emptyList(), loading = true, error = null, focusIndex = null) }
             itemsJob = viewModelScope.launch {
-                val cached = runCatching { loadItems(c, id, true) }.getOrNull()?.let(sortItems)
-                if (cached != null) {
-                    mutate { if (it.selectedId == id) it.copy(items = cached, loading = false) else it }
-                }
+                val cached = runCatching { loadItems(c, id, true) }.getOrNull()
+                if (cached != null) showItems(id, cached)
                 try {
-                    val fresh = sortItems(loadItems(c, id, false).orEmpty())
-                    mutate {
-                        when {
-                            it.selectedId != id -> it
-                            it.items != fresh -> it.copy(items = fresh, loading = false)
-                            else -> it.copy(loading = false)
-                        }
-                    }
+                    val fresh = loadItems(c, id, false).orEmpty()
+                    if (fresh != rawItems || cached == null) showItems(id, fresh)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -826,11 +895,42 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
-        /** Recalcule une catégorie virtuelle affichée (favori ajouté, catalogue de replay chargé…). */
+        /**
+         * Bouton « Actualiser » : recharge catégories et contenu depuis le serveur, sans passer par le cache.
+         * L'affichage actuel reste visible pendant le rechargement.
+         */
+        fun reload() {
+            val c = client ?: return
+            if (current().refreshing) return
+            categoriesJob?.cancel()
+            itemsJob?.cancel()
+            mutate { it.copy(refreshing = true, error = null) }
+            categoriesJob = viewModelScope.launch {
+                try {
+                    setCategories(loadCategories(c, false).orEmpty())
+                    val id = current().selectedId ?: initialCategory(rawCategories)
+                    when {
+                        id == null -> Unit
+                        current().selectedId == null -> select(id)
+                        // Catégorie virtuelle : elle sera recalculée quand le catalogue complet sera rechargé
+                        virtual(id) != null -> refreshVirtual()
+                        else -> showItems(id, loadItems(c, id, false).orEmpty())
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    mutate { it.copy(error = e.message ?: "Actualisation impossible") }
+                } finally {
+                    mutate { it.copy(refreshing = false) }
+                }
+            }
+        }
+
+        /** Recalcule une catégorie virtuelle affichée (favori ajouté, catalogue rechargé…). */
         fun refreshVirtual() {
             val id = current().selectedId ?: return
             val items = virtual(id) ?: return
-            mutate { it.copy(items = items) }
+            showItems(id, items)
         }
 
         fun retry() {
