@@ -57,7 +57,7 @@ jobs:
 
       - name: Test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-report
           path: app/build/reports/tests/
@@ -69,7 +69,7 @@ jobs:
 
       - name: Lint report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
@@ -86,7 +86,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "rabux-tv.apk"
           echo "APK_FILE=rabux-tv-${VERSION}.apk" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APK_FILE }}
           path: ${{ env.APK_FILE }}
