@@ -45,6 +45,12 @@ import fr.rabuxx.iptvtv.data.ListFilter
 import fr.rabuxx.iptvtv.data.Ranking
 import fr.rabuxx.iptvtv.data.REPLAY_CATEGORY
 import fr.rabuxx.iptvtv.data.SPORT_CATEGORY
+import fr.rabuxx.iptvtv.data.MULTI_CATEGORY
+import fr.rabuxx.iptvtv.data.PhoneLinkMode
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import fr.rabuxx.iptvtv.data.nowPlaying
 import fr.rabuxx.iptvtv.data.progress
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -58,6 +64,7 @@ private val FavoritesChip = Category(FAVORITES_CATEGORY, "★ Favoris")
 private val ReplayChip = Category(REPLAY_CATEGORY, "⟲ Replay")
 private val LatestChip = Category(LATEST_CATEGORY, "✦ Dernières sorties")
 private val SportChip = Category(SPORT_CATEGORY, "⚽ Sport ce soir")
+private val MultiChip = Category(MULTI_CATEGORY, "▦ Multi-écran")
 
 /** Écran principal : barre d'onglets façon tvOS + contenu de la section active. */
 @Composable
@@ -106,7 +113,7 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                         section = Section.Live,
                         state = state,
                         onLongPressCategory = { vm.openCategoryOptions(Section.Live, it) },
-                        extraCategories = listOfNotNull(SportChip, FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
+                        extraCategories = listOfNotNull(SportChip, MultiChip, FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
                         columns = 4,
                         emptyText = when (state.live.selectedId) {
                             FAVORITES_CATEGORY -> "Aucune chaîne favorite.\nMaintiens OK sur une chaîne pour l'ajouter."
@@ -116,7 +123,11 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                         restore = restoreHere,
                         onRestored = onRestored,
                         onSelectCategory = { id ->
-                            if (id == SPORT_CATEGORY) vm.openSport() else vm.selectCategory(Section.Live, id)
+                            when (id) {
+                                SPORT_CATEGORY -> vm.openSport()
+                                MULTI_CATEGORY -> vm.openMultiView()
+                                else -> vm.selectCategory(Section.Live, id)
+                            }
                         },
                         onRetry = { vm.retry(Section.Live) },
                         onReload = { vm.reload(Section.Live) },
@@ -471,11 +482,11 @@ private fun <T> CardGrid(
 @Composable
 private fun SettingsContent(state: UiState, vm: MainViewModel) {
     Row(
-        Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(36.dp),
+        Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(32.dp),
     ) {
         // --- Compte et application ---
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsColumn(Modifier.weight(1f)) {
             SectionTitle("Compte")
             state.savedCredentials?.let {
                 Text(it.username, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
@@ -524,11 +535,24 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
                     SettingButton("Rechercher une mise à jour", onClick = { vm.checkForUpdate() })
                 }
             }
+            SettingButton(
+                if (state.betaChannel) "Canal : bêta" else "Canal : stable",
+                onClick = { vm.setBetaChannel(!state.betaChannel) },
+            )
+            SettingHint("En bêta, tu reçois les nouveautés en avant-première (versions « -beta »), parfois moins stables.")
+            if (state.crashReportsAvailable) {
+                SettingButton(
+                    if (state.crashReports) "Rapports de plantage : activés" else "Rapports de plantage : désactivés",
+                    onClick = { vm.setCrashReports(!state.crashReports) },
+                )
+                SettingHint("Envoie le détail technique d'un plantage, sans identifiants ni adresse du serveur.")
+            }
         }
 
         // --- Préférences ---
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SettingsColumn(Modifier.weight(1f)) {
             SectionTitle("Préférences")
+            SettingButton("▤  Mon bilan de visionnage", onClick = vm::openStats)
             SettingButton(
                 if (state.preferFrench) "France en priorité : activé" else "France en priorité : désactivé",
                 onClick = { vm.setPreferFrench(!state.preferFrench) },
@@ -548,14 +572,31 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
             )
             SettingHint("Chaque appui passe à 30, 60, 90, 120 min. L'app s'arrête à la fin, après un avertissement.")
             SettingButton(
+                if (state.screensaverMinutes == 0) "Économiseur d'écran : désactivé" else "Économiseur d'écran : après ${state.screensaverMinutes} min",
+                onClick = vm::cycleScreensaver,
+            )
+            SettingButton("Voir l'économiseur", onClick = vm::startScreensaver)
+            SettingButton(
                 if (state.libraryLoading) "Actualisation du catalogue…" else "↻ Actualiser tout le catalogue",
                 onClick = { if (!state.libraryLoading) vm.reloadAll() },
             )
         }
 
-        // --- Contrôle parental ---
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SectionTitle("Contrôle parental")
+        // --- Fiches enrichies et contrôle parental ---
+        SettingsColumn(Modifier.weight(1f)) {
+            SectionTitle("Fiches enrichies")
+            Text(
+                if (state.tmdbAvailable) "TMDB activé" else "TMDB non configuré",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            SettingHint("Bandes-annonces, casting et recommandations « disponibles chez toi » grâce à TMDB (clé gratuite).")
+            SettingButton(
+                if (state.tmdbAvailable) "Changer la clé TMDB (téléphone)" else "Ajouter une clé TMDB (téléphone)",
+                onClick = { vm.openPhoneEntry(PhoneLinkMode.Tmdb) },
+            )
+
+            SectionTitle("Contrôle parental", Modifier.padding(top = 10.dp))
             Text(
                 if (state.hasPin) "Code parental activé" else "Aucun code parental",
                 fontSize = 14.sp,
@@ -579,6 +620,16 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
             }
         }
     }
+}
+
+/** Colonne de réglages défilante : le focus fait apparaître les boutons hors écran. */
+@Composable
+private fun SettingsColumn(modifier: Modifier, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier.fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
 }
 
 @Composable

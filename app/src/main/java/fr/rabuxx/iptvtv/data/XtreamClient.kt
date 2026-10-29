@@ -55,6 +55,7 @@ class XtreamClient(private val creds: Credentials, private val cache: DiskCache?
             status = status,
             expiresAt = user.str("exp_date")?.toLongOrNull(),
             maxConnections = user.str("max_connections"),
+            serverTimeZone = json.optJSONObject("server_info")?.str("timezone"),
         )
     }
 
@@ -137,6 +138,18 @@ class XtreamClient(private val creds: Credentials, private val cache: DiskCache?
         return "${creds.baseUrl}/timeshift/${enc(creds.username)}/${enc(creds.password)}/$minutes/$date:$time/${channel.streamId}.ts"
     }
 
+    /**
+     * Différé d'une chaîne avec replay, à partir de [startTs] (secondes Unix, arrondi à la minute par le serveur).
+     * Les heures sont exprimées dans le fuseau du serveur.
+     */
+    fun timeshiftUrl(channel: Channel, startTs: Long, durationMin: Long, serverTimeZone: String?): String {
+        val format = java.text.SimpleDateFormat("yyyy-MM-dd:HH-mm", java.util.Locale.ROOT)
+        serverTimeZone?.let { format.timeZone = java.util.TimeZone.getTimeZone(it) }
+        val start = format.format(java.util.Date(startTs * 1000))
+        val minutes = durationMin.coerceIn(1, 24 * 60)
+        return "${creds.baseUrl}/timeshift/${enc(creds.username)}/${enc(creds.password)}/$minutes/$start/${channel.streamId}.ts"
+    }
+
     // ---------- Films ----------
 
     /** categoryId = null → tous les films. */
@@ -168,6 +181,7 @@ class XtreamClient(private val creds: Credentials, private val cache: DiskCache?
             backdrop = info.firstBackdrop(),
             poster = info.url("movie_image") ?: info.url("cover_big"),
             extension = data?.str("container_extension"),
+            tmdbId = (info.str("tmdb_id") ?: info.str("tmdb"))?.takeIf { it.all(Char::isDigit) && it != "0" },
         )
     }
 
@@ -232,6 +246,7 @@ class XtreamClient(private val creds: Credentials, private val cache: DiskCache?
             rating = info.rating() ?: series.rating,
             backdrop = info.firstBackdrop() ?: series.backdrop,
             cast = info.str("cast"),
+            tmdbId = (info.str("tmdb") ?: info.str("tmdb_id"))?.takeIf { it.all(Char::isDigit) && it != "0" },
             episodes = episodes
                 .groupBy { it.season }
                 .toSortedMap()

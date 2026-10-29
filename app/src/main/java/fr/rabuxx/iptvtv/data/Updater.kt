@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -36,10 +37,15 @@ class Updater(private val context: Context) {
 
     val currentVersion: String = BuildConfig.VERSION_NAME
 
-    /** @return la mise à jour disponible, ou null si l'app est à jour. */
-    suspend fun check(): UpdateInfo? = withContext(Dispatchers.IO) {
+    /**
+     * @param beta true pour proposer aussi les pré-versions (tags « v0.7.0-beta.1 »).
+     * @return la mise à jour disponible, ou null si l'app est à jour.
+     */
+    suspend fun check(beta: Boolean = false): UpdateInfo? = withContext(Dispatchers.IO) {
+        // /releases/latest ignore les pré-versions : en bêta on parcourt la liste complète
+        val path = if (beta) "releases?per_page=20" else "releases/latest"
         val request = Request.Builder()
-            .url("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest")
+            .url("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/$path")
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", USER_AGENT)
             .build()
@@ -50,21 +56,30 @@ class Updater(private val context: Context) {
                 else -> resp.body?.string() ?: throw IOException("Réponse vide de GitHub")
             }
         }
-        val json = JSONObject(body)
-        val version = json.optString("tag_name").removePrefix("v").trim()
-        val assets = json.optJSONArray("assets")
-        val apk = assets?.let { arr ->
-            (0 until arr.length())
-                .mapNotNull { arr.optJSONObject(it) }
-                .firstOrNull { it.optString("name").endsWith(".apk") }
-                ?.optString("browser_download_url")
-        } ?: throw IOException("La dernière release ne contient pas d'APK")
+        val releases = if (beta) {
+            val arr = JSONArray(body)
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.filter { !it.optBoolean("draft") }
+        } else {
+            listOf(JSONObject(body))
+        }
+        val best = releases
+            .mapNotNull { r -> apkOf(r)?.let { apk -> Triple(r.optString("tag_name").removePrefix("v").trim(), apk, r) } }
+            .maxWithOrNull { a, b -> Versions.compare(a.first, b.first) }
+            ?: throw IOException("Aucune release ne contient d'APK")
 
+        val (version, apk, json) = best
         if (Versions.isNewer(version, currentVersion)) {
             UpdateInfo(version = version, apkUrl = apk, notes = json.optString("body").takeIf { it.isNotBlank() })
         } else {
             null
         }
+    }
+
+    /** APK versionné d'une release (« rabux-tv-0.7.0.apk »), sinon le premier APK. */
+    private fun apkOf(release: JSONObject): String? {
+        val assets = release.optJSONArray("assets") ?: return null
+        val apks = (0 until assets.length()).mapNotNull { assets.optJSONObject(it) }.filter { it.optString("name").endsWith(".apk") }
+        return (apks.firstOrNull { it.optString("name") != "rabux-tv.apk" } ?: apks.firstOrNull())?.optString("browser_download_url")
     }
 
     /** Notes de la Release d'une version donnée (« Quoi de neuf » après une mise à jour). */

@@ -1,5 +1,6 @@
 # Dependabot opens a pull request each week when a dependency has a new version.
 # The "Build APK" workflow runs the tests on each pull request: merge only if it is green.
+# Major versions are ignored: they are migrated together, on purpose (AGP + Gradle + Kotlin...).
 version: 2
 updates:
   - package-ecosystem: gradle
@@ -7,6 +8,9 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       # Compose, Media3, Lifecycle... updated together to stay compatible
       androidx:

@@ -85,6 +85,26 @@ class CredentialsStore(context: Context) {
         get() = prefs.getString("last_seen_version", null)
         set(value) = prefs.edit().putString("last_seen_version", value).apply()
 
+    /** Canal de mise à jour : false = versions stables, true = versions bêta aussi. */
+    var betaChannel: Boolean
+        get() = prefs.getBoolean("beta_channel", false)
+        set(value) = prefs.edit().putBoolean("beta_channel", value).apply()
+
+    /** Envoi des rapports de plantage (si l'app a été compilée avec un DSN Sentry). */
+    var crashReports: Boolean
+        get() = prefs.getBoolean("crash_reports", true)
+        set(value) = prefs.edit().putBoolean("crash_reports", value).commit().let { }
+
+    /** Clé TMDB saisie depuis le téléphone ; prioritaire sur celle intégrée à la compilation. */
+    var tmdbKey: String?
+        get() = prefs.getString("tmdb_key", null)?.takeIf { it.isNotBlank() }
+        set(value) = prefs.edit().putString("tmdb_key", value).apply()
+
+    /** Délai avant l'économiseur d'écran, en minutes (0 = désactivé). */
+    var screensaverMinutes: Int
+        get() = prefs.getInt("screensaver_minutes", 10)
+        set(value) = prefs.edit().putInt("screensaver_minutes", value).apply()
+
     /** Tri et note minimale choisis pour les films ou les séries. */
     fun listFilter(section: Section) = ListFilter(
         sort = prefs.getString("sort_${section.name}", null)

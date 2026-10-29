@@ -2,6 +2,7 @@ package fr.rabuxx.iptvtv
 
 import android.app.Application
 import android.net.Uri
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import fr.rabuxx.iptvtv.data.AccountInfo
@@ -23,6 +24,18 @@ import fr.rabuxx.iptvtv.data.ListPresenter
 import fr.rabuxx.iptvtv.data.Movie
 import fr.rabuxx.iptvtv.data.MovieInfo
 import fr.rabuxx.iptvtv.data.REPLAY_CATEGORY
+import fr.rabuxx.iptvtv.data.PhoneLinkMode
+import fr.rabuxx.iptvtv.data.Reminder
+import fr.rabuxx.iptvtv.data.Reminders
+import fr.rabuxx.iptvtv.data.StatsPeriod
+import fr.rabuxx.iptvtv.data.StatsSummary
+import fr.rabuxx.iptvtv.data.TitleMatcher
+import fr.rabuxx.iptvtv.data.TmdbClient
+import fr.rabuxx.iptvtv.data.TmdbDetails
+import fr.rabuxx.iptvtv.data.TmdbKind
+import fr.rabuxx.iptvtv.data.WatchItem
+import fr.rabuxx.iptvtv.data.WatchStatsStore
+import fr.rabuxx.iptvtv.data.WatchType
 import fr.rabuxx.iptvtv.data.SPORT_CATEGORY
 import fr.rabuxx.iptvtv.data.SportProgram
 import fr.rabuxx.iptvtv.data.SportTonight
@@ -65,6 +78,10 @@ sealed interface Route {
     data class SeriesDetail(val series: Series, val preferredEpisodeId: String? = null) : Route
     data class Replay(val channel: Channel) : Route
     data object Sport : Route
+    data object Stats : Route
+
+    /** Multi-écran : 2 à 4 chaînes en même temps. */
+    data class MultiView(val initial: List<Channel>) : Route
 
     /** Lecteur direct : on zappe dans [channels] (grille, favoris, récents ou résultats de recherche). */
     data class LivePlayer(val channels: List<Channel>, val index: Int, val fromGrid: Boolean) : Route
@@ -81,6 +98,8 @@ sealed interface Route {
         /** Renseignés pour un épisode : permettent d'enchaîner l'épisode suivant. */
         val series: Series? = null,
         val episode: Episode? = null,
+        /** Ce qui est compté dans le bilan de visionnage. */
+        val stats: WatchItem? = null,
     ) : Route
 }
 
@@ -93,6 +112,8 @@ val Route.key: String
         is Route.SeriesDetail -> "series:${series.seriesId}"
         is Route.Replay -> "replay:${channel.streamId}"
         Route.Sport -> "sport"
+        Route.Stats -> "stats"
+        is Route.MultiView -> "multi"
         is Route.LivePlayer -> "live-player"
         is Route.VodPlayer -> "vod-player:$resumeKey"
     }
@@ -143,7 +164,21 @@ sealed interface AppDialog {
     data class CategoryOptions(val section: Section, val category: Category, val locked: Boolean) : AppDialog
     data class Pin(val purpose: PinPurpose, val error: String? = null) : AppDialog
     data class WhatsNew(val version: String, val notes: String) : AppDialog
+    /** « Le match commence » : proposer de basculer sur la chaîne. */
+    data class ReminderDue(val reminder: Reminder) : AppDialog
+    /** QR code pour saisir quelque chose depuis le téléphone (clé TMDB…). */
+    data class PhoneEntry(val mode: PhoneLinkMode) : AppDialog
 }
+
+/** Fiche TMDB d'un film ou d'une série, avec les recommandations disponibles chez le fournisseur. */
+data class TmdbView(
+    val details: TmdbDetails,
+    val availableMovies: List<Movie> = emptyList(),
+    val availableSeries: List<Series> = emptyList(),
+)
+
+/** Rangée « Parce que tu as regardé… » de l'accueil. */
+data class BecauseYouWatched(val title: String, val movies: List<Movie>, val series: List<Series>)
 
 sealed interface UpdateState {
     data object Idle : UpdateState
@@ -177,6 +212,8 @@ data class UiState(
     val movieInfo: Detail<MovieInfo> = Detail(),
     val seriesInfo: Detail<SeriesInfo> = Detail(),
     val seriesInfoFor: String? = null,
+    /** Film (« m:123 ») auquel correspond [movieInfo]. */
+    val movieInfoFor: String? = null,
     val replay: Detail<List<EpgProgram>> = Detail(),
     val update: UpdateState = UpdateState.Idle,
     /** Catégories FR / VOSTFR en tête, dernières sorties par défaut. */
@@ -197,10 +234,35 @@ data class UiState(
     /** Secondes restantes avant l'arrêt (avertissement affiché pendant la dernière minute). */
     val sleepWarning: Int? = null,
     val sleepFired: Boolean = false,
+    // TMDB
+    val tmdb: Detail<TmdbView> = Detail(),
+    /** Fiche (« m:123 » ou « s:45 ») à laquelle correspond [tmdb]. */
+    val tmdbFor: String? = null,
+    val tmdbAvailable: Boolean = false,
+    val becauseYouWatched: List<BecauseYouWatched> = emptyList(),
+    // Rappels
+    val reminders: List<Reminder> = emptyList(),
+    val askNotificationPermission: Boolean = false,
+    // Bilan
+    val stats: StatsSummary? = null,
+    val statsPeriod: StatsPeriod = StatsPeriod.Month,
+    // Réglages techniques
+    val betaChannel: Boolean = false,
+    val crashReports: Boolean = true,
+    val crashReportsAvailable: Boolean = false,
+    // Économiseur d'écran
+    val screensaverMinutes: Int = 10,
+    val screensaverActive: Boolean = false,
+    val screensaverImages: List<String> = emptyList(),
+    /** true : images de fond 16:9 (diaporama) ; false : affiches (mur d'affiches). */
+    val screensaverWide: Boolean = true,
     /** Section dont le contenu doit reprendre le focus (retour depuis une fiche ou un lecteur). */
     val restoreFocus: Section? = null,
 ) {
     val route: Route get() = stack.last()
+
+    fun hasReminder(channel: Channel, program: EpgProgram): Boolean =
+        reminders.any { it.id == "${channel.streamId}:${program.startTs}" }
 
     fun isLocked(section: Section, categoryId: String): Boolean {
         val key = categoryKey(section, categoryId)
@@ -225,6 +287,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var updateJob: Job? = null
     private var searchIndex: SearchIndex? = null
     private var downloadedApk: File? = null
+    private val reminders = Reminders(app)
+    private val statsStore = WatchStatsStore(app)
+    private var tmdbClient: TmdbClient? = makeTmdbClient()
+    private var tmdbJob: Job? = null
+    private var recsJob: Job? = null
+    private var movieIndex: TitleMatcher.Index<Movie>? = null
+    private var seriesIndex: TitleMatcher.Index<Series>? = null
+    /** Identifiants TMDB déjà trouvés (« m:123 » → 27205). */
+    private val tmdbIds = HashMap<String, Long>()
+    private var lastInteraction = System.currentTimeMillis()
+    /** Lien rabuxtv://live/<id> (notification de rappel), ouvert dès que le catalogue est prêt. */
+    private var pendingLiveId: String? = null
     private var sportJob: Job? = null
     private var sleepJob: Job? = null
 
@@ -260,6 +334,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             hiddenCategories = store.hiddenCategories,
             lockedCategories = store.lockedCategories,
             hasPin = store.hasPin,
+            reminders = reminders.all(),
+            tmdbAvailable = tmdbClient != null,
+            betaChannel = store.betaChannel,
+            crashReports = store.crashReports,
+            crashReportsAvailable = BuildConfig.SENTRY_DSN.isNotBlank(),
+            screensaverMinutes = store.screensaverMinutes,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -323,6 +403,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         store.load()?.let { login(it) }
+        // Horloge interne : rappels, économiseur d'écran, sauvegarde du bilan
+        viewModelScope.launch {
+            while (true) {
+                delay(TICK_MS)
+                checkReminders()
+                checkScreensaver()
+                statsStore.flush()
+            }
+        }
+    }
+
+    override fun onCleared() {
+        statsStore.flush()
+        super.onCleared()
     }
 
     // ---------- Connexion ----------
@@ -365,6 +459,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { watchNext.clear() }
         sleepJob?.cancel()
         sportJob?.cancel()
+        tmdbJob?.cancel()
+        recsJob?.cancel()
+        reminders.clear()
+        movieIndex = null
+        seriesIndex = null
         client = null
         searchIndex = null
         fullLibrary = null
@@ -403,6 +502,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 stack = newStack,
                 restoreFocus = if (newStack.last() == Route.Main) it.section else it.restoreFocus,
             )
+        }
+        // Retour sur une fiche après avoir ouvert une recommandation : on recharge ses informations
+        when (val top = newStack.last()) {
+            is Route.MovieDetail -> if (_state.value.movieInfoFor != movieKey(top.movie)) loadMovieDetail(top.movie)
+            is Route.SeriesDetail -> if (_state.value.seriesInfoFor != top.series.seriesId) loadSeriesDetail(top.series)
+            else -> Unit
         }
         return true
     }
@@ -466,6 +571,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 url = c.replayUrl(channel, program),
                 resumeKey = "r:${channel.streamId}:${program.startTs}",
                 fromStart = true,
+                stats = liveItem(channel),
             ),
         )
     }
@@ -473,21 +579,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- Films ----------
 
     fun openMovie(movie: Movie, gridIndex: Int? = null) {
-        val c = client ?: return
+        if (client == null) return
         gridIndex?.let { moviesHandle.rememberFocus(it) }
         push(Route.MovieDetail(movie))
+        loadMovieDetail(movie)
+    }
+
+    private fun loadMovieDetail(movie: Movie) {
+        val c = client ?: return
         detailJob?.cancel()
-        _state.update { it.copy(movieInfo = Detail(loading = true)) }
+        _state.update { it.copy(movieInfo = Detail(loading = true), movieInfoFor = movieKey(movie)) }
         detailJob = viewModelScope.launch {
-            try {
-                val info = c.movieInfo(movie)
-                _state.update { it.copy(movieInfo = Detail(data = info)) }
+            val info = try {
+                c.movieInfo(movie).also { info -> _state.update { it.copy(movieInfo = Detail(data = info)) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // Pas bloquant : on peut quand même lancer le film
                 _state.update { it.copy(movieInfo = Detail(error = e.message)) }
+                null
             }
+            loadTmdb(TmdbKind.Movie, movieKey(movie), info?.tmdbId, movie.name, info?.year)
         }
     }
 
@@ -504,31 +616,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 resumeKey = movieKey(movie),
                 fromStart = fromStart,
                 history = HistoryItem(movie = playable, progressKey = movieKey(movie), updatedAt = now()),
+                stats = WatchItem(movieKey(movie), WatchType.Movie, movie.name, movie.poster, currentMovieGenre(movie)),
             ),
         )
     }
 
     fun movieKey(movie: Movie) = "m:${movie.streamId}"
 
+    private fun currentMovieGenre(movie: Movie): String? {
+        val s = _state.value
+        val onDetail = (s.stack.lastOrNull() as? Route.MovieDetail)?.movie?.streamId == movie.streamId
+        if (!onDetail) return null
+        return s.movieInfo.data?.genre
+            ?: s.tmdb.data?.details?.takeIf { s.tmdbFor == movieKey(movie) }?.genres?.joinToString(", ")
+    }
+
     // ---------- Séries ----------
 
     fun openSeries(series: Series, gridIndex: Int? = null, preferredEpisodeId: String? = null) {
-        val c = client ?: return
+        if (client == null) return
         gridIndex?.let { seriesHandle.rememberFocus(it) }
         push(Route.SeriesDetail(series, preferredEpisodeId))
+        loadSeriesDetail(series)
+    }
+
+    private fun loadSeriesDetail(series: Series) {
+        val c = client ?: return
         detailJob?.cancel()
         _state.update { it.copy(seriesInfo = Detail(loading = true), seriesInfoFor = series.seriesId) }
         detailJob = viewModelScope.launch {
-            try {
-                val info = c.seriesInfo(series)
-                _state.update { it.copy(seriesInfo = Detail(data = info)) }
+            val info = try {
+                c.seriesInfo(series).also { info -> _state.update { it.copy(seriesInfo = Detail(data = info)) } }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.update { it.copy(seriesInfo = Detail(error = e.message ?: "Impossible de charger la série")) }
+                null
             }
+            loadTmdb(TmdbKind.Tv, seriesKey(series), info?.tmdbId, series.name, info?.year ?: series.year)
         }
     }
+
+    fun seriesKey(series: Series) = "s:${series.seriesId}"
 
     fun playEpisode(series: Series, episode: Episode, replace: Boolean = false) {
         val route = episodeRoute(series, episode) ?: return
@@ -551,6 +680,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ),
             series = series,
             episode = episode,
+            stats = WatchItem(
+                seriesKey(series),
+                WatchType.Series,
+                series.name,
+                series.cover,
+                series.genre ?: _state.value.seriesInfo.data?.takeIf { _state.value.seriesInfoFor == series.seriesId }?.genre,
+            ),
         )
     }
 
@@ -617,9 +753,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Épisode : la série reste dans « À suivre » pour enchaîner la suite
             else -> listOf(entry.copy(updatedAt = now())) + others
         }.take(20)
+        val firstChanged = updated.firstOrNull()?.id != _state.value.history.firstOrNull()?.id
         libraryStore.saveHistory(updated)
         _state.update { it.copy(history = updated) }
         syncWatchNext()
+        if (firstChanged) computeBecauseYouWatched()
     }
 
     fun removeFromHistory(item: HistoryItem) {
@@ -668,6 +806,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun setLibrary(library: Library) {
         fullLibrary = library
+        movieIndex = null
+        seriesIndex = null
         val visible = withContext(Dispatchers.Default) { visibleLibrary(library) }
         val index = withContext(Dispatchers.Default) { SearchIndex(visible) }
         searchIndex = index
@@ -676,6 +816,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         handles.forEach { it.refreshVirtual() }
         val q = _state.value.search.query
         if (q.isNotBlank()) search(q)
+        openPendingDeepLink()
+        computeBecauseYouWatched()
     }
 
     // ---------- Tri FR / dernières sorties ----------
@@ -990,14 +1132,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- Accueil Android TV : liens profonds ----------
 
     fun handleDeepLink(uri: Uri?) {
-        if (uri == null || uri.scheme != "rabuxtv" || uri.host != "history") return
-        pendingHistoryId = uri.lastPathSegment ?: return
+        if (uri == null || uri.scheme != "rabuxtv") return
+        when (uri.host) {
+            "history" -> pendingHistoryId = uri.lastPathSegment ?: return
+            "live" -> pendingLiveId = uri.lastPathSegment ?: return
+            else -> return
+        }
         openPendingDeepLink()
     }
 
     private fun openPendingDeepLink() {
-        val id = pendingHistoryId ?: return
         if (client == null) return // traité après la connexion
+        pendingLiveId?.let { id ->
+            // Notification de rappel : on attend que la liste des chaînes soit chargée
+            val channel = _state.value.library?.live?.firstOrNull { it.streamId == id } ?: return
+            pendingLiveId = null
+            _state.update { it.copy(stack = listOf(Route.Main), dialog = null) }
+            playChannels(listOf(channel), 0)
+            return
+        }
+        val id = pendingHistoryId ?: return
         pendingHistoryId = null
         val item = _state.value.history.firstOrNull { it.id == id } ?: return
         _state.update { it.copy(stack = listOf(Route.Main)) }
@@ -1020,6 +1174,299 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val notes = updater.notesFor(current) ?: return@launch
             _state.update { if (it.dialog == null) it.copy(dialog = AppDialog.WhatsNew(current, notes)) else it }
+        }
+    }
+
+    // ---------- TMDB : fiches enrichies et recommandations ----------
+
+    private fun tmdbKey(): String? = store.tmdbKey ?: BuildConfig.TMDB_API_KEY.takeIf { it.isNotBlank() }
+
+    private fun makeTmdbClient(): TmdbClient? = tmdbKey()?.let { TmdbClient(it, diskCache) }
+
+    /** Clé TMDB saisie depuis le téléphone (null pour revenir à celle de la compilation). */
+    fun setTmdbKey(key: String?) {
+        store.tmdbKey = key?.trim()?.takeIf { it.isNotEmpty() }
+        tmdbClient = makeTmdbClient()
+        tmdbIds.clear()
+        _state.update {
+            it.copy(tmdbAvailable = tmdbClient != null, dialog = if (it.dialog is AppDialog.PhoneEntry) null else it.dialog)
+        }
+        computeBecauseYouWatched()
+    }
+
+    private suspend fun <T> attempt(block: suspend () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        null
+    }
+
+    /** Identifiant TMDB : celui du serveur IPTV s'il existe, sinon recherche par titre et année. */
+    private suspend fun resolveTmdbId(kind: TmdbKind, key: String, xtreamId: String?, name: String, year: String?): Long? {
+        tmdbIds[key]?.let { return it }
+        val t = tmdbClient ?: return null
+        val id = xtreamId?.toLongOrNull()
+            ?: t.search(kind, TitleMatcher.cleanTitle(name), year?.take(4)?.toIntOrNull() ?: TitleMatcher.year(name))
+        if (id != null) tmdbIds[key] = id
+        return id
+    }
+
+    private fun loadTmdb(kind: TmdbKind, key: String, xtreamId: String?, name: String, year: String?) {
+        val t = tmdbClient ?: return
+        tmdbJob?.cancel()
+        _state.update { it.copy(tmdb = Detail(loading = true), tmdbFor = key) }
+        tmdbJob = viewModelScope.launch {
+            try {
+                val id = resolveTmdbId(kind, key, xtreamId, name, year)
+                val details = id?.let { t.details(kind, it) }
+                if (details == null) {
+                    _state.update { if (it.tmdbFor == key) it.copy(tmdb = Detail()) else it }
+                    return@launch
+                }
+                val view = withContext(Dispatchers.Default) { matchRecommendations(details, exclude = key) }
+                _state.update { if (it.tmdbFor == key) it.copy(tmdb = Detail(data = view)) else it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { if (it.tmdbFor == key) it.copy(tmdb = Detail(error = e.message)) else it }
+            }
+        }
+    }
+
+    /** Ne garde des recommandations TMDB que celles disponibles chez le fournisseur. */
+    private fun matchRecommendations(details: TmdbDetails, exclude: String): TmdbView {
+        val lib = _state.value.library ?: return TmdbView(details)
+        return when (details.kind) {
+            TmdbKind.Movie -> {
+                val index = movieIndex ?: TitleMatcher.Index(lib.movies) { it.name }.also { movieIndex = it }
+                val found = details.recommendations
+                    .mapNotNull { r -> index.find(r.title, r.year, r.originalTitle) }
+                    .filter { movieKey(it) != exclude }
+                    .distinctBy { it.streamId }
+                    .take(MAX_RECOMMENDATIONS)
+                TmdbView(details, availableMovies = found)
+            }
+            TmdbKind.Tv -> {
+                val index = seriesIndex ?: TitleMatcher.Index(lib.series) { it.name }.also { seriesIndex = it }
+                val found = details.recommendations
+                    .mapNotNull { r -> index.find(r.title, r.year, r.originalTitle) }
+                    .filter { seriesKey(it) != exclude }
+                    .distinctBy { it.seriesId }
+                    .take(MAX_RECOMMENDATIONS)
+                TmdbView(details, availableSeries = found)
+            }
+        }
+    }
+
+    /** Rangées « Parce que tu as regardé… » de l'accueil, à partir du dernier film et de la dernière série. */
+    private fun computeBecauseYouWatched() {
+        val t = tmdbClient
+        val c = client
+        if (t == null || c == null || _state.value.library == null) {
+            _state.update { it.copy(becauseYouWatched = emptyList()) }
+            return
+        }
+        recsJob?.cancel()
+        recsJob = viewModelScope.launch {
+            delay(RECS_DEBOUNCE_MS) // le catalogue arrive en plusieurs fois au démarrage
+            val history = _state.value.history
+            val seen = history.map { it.id }.toSet()
+            val rows = mutableListOf<BecauseYouWatched>()
+
+            history.firstNotNullOfOrNull { it.movie }?.let { m ->
+                val info = attempt { c.movieInfo(m) }
+                val id = attempt { resolveTmdbId(TmdbKind.Movie, movieKey(m), info?.tmdbId, m.name, info?.year) }
+                val details = id?.let { attempt { t.details(TmdbKind.Movie, it) } }
+                if (details != null) {
+                    val view = withContext(Dispatchers.Default) { matchRecommendations(details, movieKey(m)) }
+                    val movies = view.availableMovies.filter { movieKey(it) !in seen }
+                    if (movies.isNotEmpty()) rows += BecauseYouWatched(TitleMatcher.cleanTitle(m.name), movies, emptyList())
+                }
+            }
+            history.firstNotNullOfOrNull { it.series }?.let { sr ->
+                val id = attempt { resolveTmdbId(TmdbKind.Tv, seriesKey(sr), null, sr.name, sr.year) }
+                val details = id?.let { attempt { t.details(TmdbKind.Tv, it) } }
+                if (details != null) {
+                    val view = withContext(Dispatchers.Default) { matchRecommendations(details, seriesKey(sr)) }
+                    val series = view.availableSeries.filter { seriesKey(it) !in seen }
+                    if (series.isNotEmpty()) rows += BecauseYouWatched(TitleMatcher.cleanTitle(sr.name), emptyList(), series)
+                }
+            }
+            _state.update { it.copy(becauseYouWatched = rows) }
+        }
+    }
+
+    // ---------- Direct : différé ----------
+
+    /**
+     * Adresse de différé d'une chaîne avec replay, à partir de [startTs] (secondes Unix).
+     * null si la chaîne n'a pas de replay : la pause est alors limitée à ce que le lecteur a en mémoire.
+     */
+    fun timeshiftUrl(channel: Channel, startTs: Long): String? {
+        if (channel.archiveDays <= 0) return null
+        val c = client ?: return null
+        val now = System.currentTimeMillis() / 1000
+        val minutes = (now - startTs) / 60 + TIMESHIFT_EXTRA_MIN
+        return c.timeshiftUrl(channel, startTs, minutes, _state.value.account?.serverTimeZone)
+    }
+
+    // ---------- Multi-écran ----------
+
+    /** Nombre de chaînes simultanées : 4 au plus, et pas plus que l'abonnement n'en autorise. */
+    fun maxMultiStreams(): Int = (_state.value.account?.maxStreams ?: 4).coerceIn(1, 4)
+
+    fun openMultiView(initial: List<Channel> = emptyList()) {
+        push(Route.MultiView(initial.distinctBy { it.streamId }.take(maxMultiStreams())))
+        // Le programme sport alimente le sélecteur (« Sport en direct »)
+        loadSport(force = false)
+    }
+
+    // ---------- Rappels ----------
+
+    fun toggleReminder(channel: Channel, program: EpgProgram) {
+        val id = "${channel.streamId}:${program.startTs}"
+        val list = if (_state.value.reminders.any { it.id == id }) {
+            reminders.remove(id)
+        } else {
+            reminders.add(Reminder(channel, program.title, program.startTs, program.stopTs))
+        }
+        _state.update {
+            it.copy(
+                reminders = list,
+                // Android 13+ : autorisation des notifications demandée au premier rappel
+                askNotificationPermission = Build.VERSION.SDK_INT >= 33 && list.size > it.reminders.size,
+            )
+        }
+    }
+
+    fun consumeNotificationPermission() = _state.update { it.copy(askNotificationPermission = false) }
+
+    fun watchReminder(reminder: Reminder) {
+        val channel = _state.value.library?.live?.firstOrNull { it.streamId == reminder.channel.streamId } ?: reminder.channel
+        _state.update { it.copy(dialog = null, stack = listOf(Route.Main)) }
+        playChannels(listOf(channel), 0)
+    }
+
+    private fun checkReminders() {
+        val s = _state.value
+        if (s.dialog != null) return
+        val now = System.currentTimeMillis() / 1000
+        val due = s.reminders.firstOrNull { it.startTs - Reminders.LEAD_MS / 1000 <= now && now < it.stopTs } ?: return
+        val list = reminders.remove(due.id)
+        _state.update { it.copy(reminders = list, dialog = AppDialog.ReminderDue(due)) }
+    }
+
+    // ---------- Économiseur d'écran ----------
+
+    fun onUserActivity() {
+        lastInteraction = System.currentTimeMillis()
+        if (_state.value.screensaverActive) _state.update { it.copy(screensaverActive = false) }
+    }
+
+    private fun checkScreensaver() {
+        val s = _state.value
+        if (s.screensaverMinutes <= 0 || s.screensaverActive || s.dialog != null) return
+        // Jamais pendant une lecture
+        val route = s.route
+        if (route is Route.LivePlayer || route is Route.VodPlayer || route is Route.MultiView || route == Route.Login) return
+        if (System.currentTimeMillis() - lastInteraction < s.screensaverMinutes * 60_000L) return
+        startScreensaver()
+    }
+
+    fun startScreensaver() {
+        val s = _state.value
+        val lib = s.library
+        val backdrops = lib?.series.orEmpty().mapNotNull { it.backdrop }.distinct().shuffled().take(30)
+        val posters = (
+            s.favorites.movies.mapNotNull { it.poster } +
+                s.recentMovies.mapNotNull { it.poster } +
+                s.recentSeries.mapNotNull { it.cover } +
+                lib?.movies.orEmpty().shuffled().take(80).mapNotNull { it.poster }
+            ).distinct().shuffled().take(40)
+        val wide = backdrops.size >= 5
+        _state.update {
+            it.copy(screensaverActive = true, screensaverImages = if (wide) backdrops else posters, screensaverWide = wide)
+        }
+    }
+
+    fun cycleScreensaver() {
+        val steps = SCREENSAVER_STEPS
+        val next = steps[(steps.indexOf(_state.value.screensaverMinutes) + 1).mod(steps.size)]
+        store.screensaverMinutes = next
+        _state.update { it.copy(screensaverMinutes = next) }
+    }
+
+    // ---------- Bilan de visionnage ----------
+
+    private fun liveItem(channel: Channel) =
+        WatchItem("l:${channel.streamId}", WatchType.Live, channel.name, channel.icon, null)
+
+    fun recordLive(channel: Channel, seconds: Long) = statsStore.record(liveItem(channel), seconds)
+
+    fun recordVod(route: Route.VodPlayer, seconds: Long) {
+        route.stats?.let { statsStore.record(it, seconds) }
+    }
+
+    fun openStats() {
+        push(Route.Stats)
+        loadStats()
+    }
+
+    fun setStatsPeriod(period: StatsPeriod) {
+        _state.update { it.copy(statsPeriod = period) }
+        loadStats()
+    }
+
+    fun resetStats() {
+        statsStore.clear()
+        loadStats()
+    }
+
+    private fun loadStats() {
+        viewModelScope.launch {
+            val period = _state.value.statsPeriod
+            val summary = withContext(Dispatchers.Default) {
+                statsStore.flush()
+                statsStore.summary(period)
+            }
+            _state.update { it.copy(stats = summary) }
+        }
+    }
+
+    // ---------- Réglages techniques ----------
+
+    fun setBetaChannel(enabled: Boolean) {
+        store.betaChannel = enabled
+        _state.update { it.copy(betaChannel = enabled, update = UpdateState.Idle) }
+        checkForUpdate()
+    }
+
+    /** Pris en compte immédiatement à la désactivation, au prochain lancement à l'activation. */
+    fun setCrashReports(enabled: Boolean) {
+        store.crashReports = enabled
+        if (!enabled) runCatching { io.sentry.Sentry.close() }
+        _state.update { it.copy(crashReports = enabled) }
+    }
+
+    // ---------- Saisie depuis le téléphone ----------
+
+    fun openPhoneEntry(mode: PhoneLinkMode) = _state.update { it.copy(dialog = AppDialog.PhoneEntry(mode)) }
+
+    /** Formulaire reçu du téléphone (appelé depuis le fil du serveur local). */
+    fun onPhoneForm(mode: PhoneLinkMode, form: Map<String, String>) {
+        // On repasse sur le fil principal : tout l'état de l'app y est modifié
+        viewModelScope.launch {
+            when (mode) {
+                PhoneLinkMode.Login -> login(
+                    Credentials(
+                        server = form["server"].orEmpty(),
+                        username = form["username"].orEmpty(),
+                        password = form["password"].orEmpty(),
+                    ),
+                )
+                PhoneLinkMode.Tmdb -> setTmdbKey(form["tmdb"])
+            }
         }
     }
 
@@ -1075,7 +1522,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (!silent) _state.update { it.copy(update = UpdateState.Checking) }
         updateJob = viewModelScope.launch {
             val result: UpdateState = try {
-                updater.check()?.let { UpdateState.Available(it) } ?: if (silent) UpdateState.Idle else UpdateState.UpToDate
+                updater.check(beta = store.betaChannel)?.let { UpdateState.Available(it) } ?: if (silent) UpdateState.Idle else UpdateState.UpToDate
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1114,6 +1561,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        const val TICK_MS = 15_000L
+        const val MAX_RECOMMENDATIONS = 20
+        const val RECS_DEBOUNCE_MS = 3_000L
+        const val TIMESHIFT_EXTRA_MIN = 180L
+        val SCREENSAVER_STEPS = listOf(0, 5, 10, 15, 30)
         const val EPG_TTL_MS = 15 * 60_000L
         const val SPORT_MAX_CHANNELS = 80
         const val SPORT_MAX_UPCOMING = 150

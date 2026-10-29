@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,6 +51,9 @@ fun SportScreen(
     detail: Detail<SportTonight>,
     onPlay: (channels: List<Channel>, index: Int) -> Unit,
     onReload: () -> Unit,
+    hasReminder: (SportProgram) -> Boolean,
+    onToggleReminder: (SportProgram) -> Unit,
+    onMultiView: (List<Channel>) -> Unit,
 ) {
     val data = detail.data
     val firstFocus = remember { FocusRequester() }
@@ -70,10 +74,20 @@ fun SportScreen(
             Column(Modifier.weight(1f)) {
                 Text("Sport ce soir", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    SimpleDateFormat("EEEE d MMMM", Locale.FRANCE).format(Date()).replaceFirstChar { it.uppercase() },
+                    SimpleDateFormat("EEEE d MMMM", Locale.FRANCE).format(Date()).replaceFirstChar { it.uppercase() } +
+                        "  ·  maintiens OK sur un match à venir pour être prévenu",
                     color = TextSecondary,
                     fontSize = 13.sp,
                 )
+            }
+            if (data != null && data.live.isNotEmpty()) {
+                ChipButton(
+                    label = "▦ Multi-écran",
+                    selected = false,
+                    // Les chaînes sport qui diffusent un match en ce moment
+                    onClick = { onMultiView(data.live.map { it.channel }.distinctBy { it.streamId }) },
+                )
+                Spacer(Modifier.width(8.dp))
             }
             ChipButton(
                 label = if (detail.loading) "Chargement…" else "↻ Actualiser",
@@ -112,8 +126,10 @@ fun SportScreen(
                         SportRow(
                             p = p,
                             live = false,
+                            reminder = hasReminder(p),
                             modifier = if (data.live.isEmpty() && i == 0) Modifier.focusRequester(firstFocus) else Modifier,
                             onClick = { onPlay(data.channels, data.channels.indexOf(p.channel).coerceAtLeast(0)) },
+                            onLongClick = { onToggleReminder(p) },
                         )
                     }
                 }
@@ -128,9 +144,17 @@ private fun GroupTitle(text: String) {
 }
 
 @Composable
-private fun SportRow(p: SportProgram, live: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun SportRow(
+    p: SportProgram,
+    live: Boolean,
+    modifier: Modifier,
+    onClick: () -> Unit,
+    reminder: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+) {
     Surface(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier.fillMaxWidth(),
         shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
         colors = ClickableSurfaceDefaults.colors(
@@ -162,8 +186,12 @@ private fun SportRow(p: SportProgram, live: Boolean, modifier: Modifier, onClick
                 }
             }
             Text(
-                if (live) "● Direct" else clock(p.program.startTs),
-                modifier = Modifier.width(64.dp),
+                when {
+                    live -> "● Direct"
+                    reminder -> "🔔 " + clock(p.program.startTs)
+                    else -> clock(p.program.startTs)
+                },
+                modifier = Modifier.width(84.dp),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = if (live) Color(0xFFFF453A) else LocalContentColor.current.copy(alpha = 0.75f),

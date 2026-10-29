@@ -2,7 +2,18 @@
 
 Lecteur IPTV pour Android TV, compatible **Xtream Codes** (serveur + identifiant + mot de passe), avec une interface inspirée de l'Apple TV.
 
-## Fonctionnalités (v0.6)
+## Fonctionnalités (v0.7)
+
+**Nouveautés v0.7**
+- **Connexion depuis le téléphone** : QR code sur l'écran de connexion, saisie au clavier du téléphone (même Wi-Fi)
+- **Pause du direct** : OK ouvre la barre de commandes (pause, −1 min, −5 min, retour au direct) ; différé du serveur sur les chaînes avec replay
+- **Rappels** : maintiens OK sur un match à venir dans Sport ce soir ; alerte dans l'app et notification
+- **Multi-écran** : 2 à 4 chaînes en même temps (limité par l'abonnement), le son suit la case sélectionnée
+- **Fiches enrichies TMDB** : bande-annonce (YouTube), casting, « Dans la même veine » limité à ce qui est disponible chez toi, rangées « Parce que tu as regardé… » sur l'accueil
+- **Économiseur d'écran** : diaporama des images de fond ou mur d'affiches, avec l'heure
+- **Mon bilan** : temps regardé (7 jours, 30 jours, 12 mois), répartition direct/films/séries, palmarès, genres, activité
+- **Canal bêta** (Réglages) et **rapports de plantage** (Sentry, identifiants masqués)
+
 
 **Nouveautés v0.6**
 - **Guide TV** : programme en cours (avec avancement) sur chaque chaîne, programme suivant dans le bandeau du lecteur
@@ -77,9 +88,28 @@ app/src/main/java/fr/rabuxx/iptvtv/
 
 ---
 
+## Services optionnels (secrets GitHub)
+
+| Secret | Rôle | Sans le secret |
+|---|---|---|
+| `TMDB_API_KEY` | Clé API TMDB (gratuite : themoviedb.org › Paramètres › API) | Fiches enrichies désactivées (une clé peut aussi être saisie depuis le téléphone dans Réglages) |
+| `SENTRY_DSN` | DSN d'un projet Sentry (ou GlitchTip auto-hébergé, compatible) | Aucun rapport de plantage |
+
+En local, les mêmes noms peuvent être mis dans `local.properties` (non versionné).
+
+## Publier une bêta
+
+```powershell
+git tag v0.7.1-beta.1
+git push origin v0.7.1-beta.1
+```
+
+Un tag avec un tiret est publié en **pré-version** : seules les TV réglées sur le canal bêta la proposent, et le lien `latest/download/rabux-tv.apk` continue de pointer vers la dernière version stable.
+
 ## Qualité (CI)
 
-- **Tests unitaires** (`app/src/test`) : tri FR/VOSTFR/sport, filtres, nettoyage des titres, versions, guide TV, formatage.
+- **Tests unitaires** (`app/src/test`) : tri FR/VOSTFR/sport, filtres, nettoyage des titres, versions et bêtas, rapprochement TMDB, bilan, masquage des identifiants, serveur de saisie, guide TV, formatage.
+- **Tests d'interface** (`app/src/androidTest`) : l'app démarre sur un émulateur Android et affiche l'écran de connexion (job séparé, non bloquant pour les Releases).
   Lancer en local : `./gradlew testDebugUnitTest`
 - La CI exécute les tests à chaque push et pull request ; **si un test échoue, aucun APK ni Release n'est publié**.
 - Rapport **lint** publié en artefact du workflow (non bloquant).
@@ -97,7 +127,7 @@ Si le dépôt a un autre nom, modifie `iptv.updateRepo` dans `gradle.properties`
 cd C:\Users\petit\Downloads\iptv-tv\iptv-tv
 git init
 git add .
-git commit -m "Rabux TV v0.4.0"
+git commit -m "Rabux TV v0.7.0"
 git branch -M main
 git remote add origin https://github.com/Rabuxx/iptv-tv.git
 git push -u origin main

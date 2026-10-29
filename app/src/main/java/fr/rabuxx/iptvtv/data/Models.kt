@@ -18,7 +18,12 @@ data class AccountInfo(
     /** Date d'expiration en secondes Unix, null si illimité ou non renseigné. */
     val expiresAt: Long?,
     val maxConnections: String?,
-)
+    /** Fuseau horaire du serveur (« Europe/Paris »), utilisé pour les adresses de différé. */
+    val serverTimeZone: String? = null,
+) {
+    /** Nombre de connexions simultanées autorisées, ou null si inconnu. */
+    val maxStreams: Int? get() = maxConnections?.toIntOrNull()?.takeIf { it > 0 }
+}
 
 data class Category(
     val id: String,
@@ -57,6 +62,8 @@ data class MovieInfo(
     val backdrop: String?,
     val poster: String?,
     val extension: String?,
+    /** Identifiant TMDB fourni par le serveur, s'il existe. */
+    val tmdbId: String? = null,
 )
 
 data class Series(
@@ -93,6 +100,7 @@ data class SeriesInfo(
     val cast: String?,
     /** Saisons triées → épisodes triés. */
     val episodes: Map<Int, List<Episode>>,
+    val tmdbId: String? = null,
 )
 
 /** Programme passé d'une chaîne avec replay. */
@@ -154,6 +162,8 @@ const val REPLAY_CATEGORY = "__replay__"
 const val LATEST_CATEGORY = "__latest__"
 /** Direct : ouvre la page « Sport ce soir » au lieu d'une catégorie. */
 const val SPORT_CATEGORY = "__sport__"
+/** Direct : ouvre le multi-écran. */
+const val MULTI_CATEGORY = "__multi__"
 
 /** Programme en cours parmi une liste triée, ou null. */
 fun List<EpgProgram>.nowPlaying(nowSec: Long = System.currentTimeMillis() / 1000): EpgProgram? =

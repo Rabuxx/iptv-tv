@@ -44,6 +44,7 @@ import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.AppDialog
 import fr.rabuxx.iptvtv.MainViewModel
 import fr.rabuxx.iptvtv.PinPurpose
+import fr.rabuxx.iptvtv.data.PhoneLinkMode
 
 /**
  * Fenêtres par-dessus l'écran courant. Une vraie fenêtre Dialog garde le focus de la télécommande
@@ -60,6 +61,8 @@ fun AppDialogHost(dialog: AppDialog?, vm: MainViewModel) {
             is AppDialog.CategoryOptions -> CategoryOptionsDialog(dialog, vm)
             is AppDialog.Pin -> PinDialog(dialog, vm)
             is AppDialog.WhatsNew -> WhatsNewDialog(dialog, vm)
+            is AppDialog.ReminderDue -> ReminderDialog(dialog, vm)
+            is AppDialog.PhoneEntry -> PhoneEntryDialog(dialog, vm)
         }
     }
 }
@@ -273,5 +276,50 @@ private fun WhatsNewDialog(d: AppDialog.WhatsNew, vm: MainViewModel) {
                 }
         }
         ActionButton("OK", onClick = vm::dismissDialog, modifier = Modifier.fillMaxWidth().focusRequester(first))
+    }
+}
+
+// ---------- Rappel : le programme commence ----------
+
+@Composable
+private fun ReminderDialog(d: AppDialog.ReminderDue, vm: MainViewModel) {
+    val first = rememberInitialFocus()
+    val start = java.text.SimpleDateFormat("HH:mm", java.util.Locale.FRANCE).format(java.util.Date(d.reminder.startTs * 1000))
+    DialogCard(
+        title = d.reminder.title,
+        subtitle = "Commence à $start sur ${d.reminder.channel.name}",
+    ) {
+        ActionButton(
+            "▶  Regarder maintenant",
+            onClick = { vm.watchReminder(d.reminder) },
+            modifier = Modifier.fillMaxWidth().focusRequester(first),
+        )
+        ActionButton("Plus tard", onClick = vm::dismissDialog, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+// ---------- Saisie depuis le téléphone (clé TMDB) ----------
+
+@Composable
+private fun PhoneEntryDialog(d: AppDialog.PhoneEntry, vm: MainViewModel) {
+    val url = rememberPhoneLinkUrl(d.mode) { form -> vm.onPhoneForm(d.mode, form) }
+    val first = rememberInitialFocus()
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PhoneLinkCard(
+            url = url,
+            title = when (d.mode) {
+                PhoneLinkMode.Tmdb -> "Clé TMDB depuis ton téléphone"
+                PhoneLinkMode.Login -> "Connexion depuis ton téléphone"
+            },
+            modifier = Modifier.width(380.dp),
+        )
+        if (d.mode == PhoneLinkMode.Tmdb) {
+            Text(
+                "Clé gratuite : themoviedb.org › Paramètres › API",
+                color = TextSecondary,
+                fontSize = 12.sp,
+            )
+        }
+        ActionButton("Fermer", onClick = vm::dismissDialog, modifier = Modifier.focusRequester(first))
     }
 }

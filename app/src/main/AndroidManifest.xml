@@ -4,12 +4,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Mise à jour intégrée : installation de l'APK téléchargé depuis GitHub -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Rappels de programmes (« préviens-moi quand le match commence ») -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- App TV : pas d'écran tactile requis, compatible Leanback -->
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
+        android:name=".RabuxApp"
         android:allowBackup="false"
         android:banner="@drawable/banner_rabux"
         android:icon="@drawable/ic_rabux"
@@ -35,7 +38,22 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="rabuxtv" android:host="history" />
             </intent-filter>
+            <!-- Notification d'un rappel : rabuxtv://live/<id de chaîne> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="rabuxtv" android:host="live" />
+            </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".data.ReminderReceiver"
+            android:exported="false" />
+
+        <!-- Sentry est démarré par RabuxApp, seulement si un DSN est configuré -->
+        <meta-data
+            android:name="io.sentry.auto-init"
+            android:value="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

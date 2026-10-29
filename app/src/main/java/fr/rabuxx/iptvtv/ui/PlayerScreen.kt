@@ -167,11 +167,14 @@ private fun ErrorBox(message: String, hint: String?, modifier: Modifier) {
 
 private const val LIVE_MAX_RETRIES = 5
 
+/** En dessous de cette durée, une pause reprend simplement là où elle s'est arrêtée. */
+private const val SHORT_PAUSE_S = 20L
+
 /**
  * Lecteur TV en direct.
- * ↑ / ↓ (ou CH+ / CH−) : zapper · ← : chaîne précédente · → : liste des chaînes
- * 0-9 : aller à un numéro de chaîne · OK : bandeau d'infos · Retour : revenir.
- * Chaque chaîne est lue en MPEG-TS ; en cas d'échec, nouvel essai en HLS, puis reconnexions automatiques.
+ * ↑ / ↓ (ou CH+ / CH−) : zapper · ← : chaîne précédente · → : liste des chaînes · 0-9 : numéro de chaîne
+ * OK : barre de commandes (pause, retour en arrière, direct, multi-écran) · Retour : revenir.
+ * Pause et retour en arrière utilisent le différé du serveur sur les chaînes avec replay.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -179,10 +182,13 @@ fun LivePlayerScreen(
     channels: List<Channel>,
     startIndex: Int,
     urlFor: (Channel, String) -> String,
+    timeshiftUrl: (Channel, Long) -> String?,
     epg: Map<String, List<EpgProgram>>,
     onRequestEpg: (Channel) -> Unit,
     onZapped: (Int) -> Unit,
     onJumpToNumber: (String) -> Boolean,
+    onWatched: (Channel, Long) -> Unit,
+    onMultiView: (Channel) -> Unit,
 ) {
     val player = rememberIptvPlayer()
     var index by remember { mutableIntStateOf(startIndex.coerceIn(channels.indices)) }
@@ -191,14 +197,26 @@ fun LivePlayerScreen(
     var showInfo by remember { mutableStateOf(true) }
     var buffering by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
     var retries by remember { mutableIntStateOf(0) }
     var pendingRetry by remember { mutableStateOf(false) }
     var retryTick by remember { mutableIntStateOf(0) }
     var digits by remember { mutableStateOf("") }
     var digitsError by remember { mutableStateOf<String?>(null) }
     var listOpen by remember { mutableStateOf(false) }
+    var controlsOpen by remember { mutableStateOf(false) }
+    // Pause et différé
+    var paused by remember { mutableStateOf(false) }
+    var pausedAt by remember { mutableStateOf<Long?>(null) }
+    /** Début (secondes Unix, à la minute) du flux différé en cours ; null = direct. */
+    var shiftStart by remember { mutableStateOf<Long?>(null) }
+    var shiftTick by remember { mutableIntStateOf(0) }
+    var positionSec by remember { mutableLongStateOf(0L) }
     // Rafraîchit l'avancement des programmes affichés
     var clockTick by remember { mutableIntStateOf(0) }
+
+    val channel = channels[index]
+    val hasArchive = channel.archiveDays > 0
 
     DisposableEffect(Unit) {
         fun scheduleRetry() {
@@ -215,12 +233,21 @@ fun LivePlayerScreen(
                 when (state) {
                     Player.STATE_READY -> retries = 0
                     // Un flux direct qui « se termine » est un flux coupé : on se reconnecte
-                    Player.STATE_ENDED -> scheduleRetry()
+                    Player.STATE_ENDED -> if (shiftStart != null) {
+                        shiftStart = null // fin du différé disponible : retour au direct
+                    } else {
+                        scheduleRetry()
+                    }
                 }
             }
 
             override fun onPlayerError(e: PlaybackException) {
                 when {
+                    // Différé refusé par le serveur : retour au direct plutôt qu'un écran d'erreur
+                    shiftStart != null -> {
+                        shiftStart = null
+                        notice = "Différé indisponible sur cette chaîne : retour au direct"
+                    }
                     e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW -> {
                         player.seekToDefaultPosition()
                         player.prepare()
@@ -237,16 +264,31 @@ fun LivePlayerScreen(
         }
     }
 
-    val channel = channels[index]
+    /** Instant (secondes Unix) de ce qui est à l'écran : maintenant en direct, plus tôt en différé. */
+    fun playbackTs(): Long {
+        val now = System.currentTimeMillis() / 1000
+        val start = shiftStart ?: return now
+        return (start + player.currentPosition / 1000).coerceAtMost(now)
+    }
+
     val programs = epg[channel.streamId].orEmpty()
     val nowSec = remember(clockTick, index) { System.currentTimeMillis() / 1000 }
     val current = programs.nowPlaying(nowSec)
     val next = programs.upNext(nowSec)
+    val delaySec = shiftStart?.let { (System.currentTimeMillis() / 1000 - (it + positionSec)).coerceAtLeast(0) }
 
     LaunchedEffect(Unit) {
         while (true) {
             delay(30_000)
             clockTick++
+        }
+    }
+
+    // Position dans le différé, pour afficher le retard
+    LaunchedEffect(shiftStart) {
+        while (shiftStart != null) {
+            positionSec = player.currentPosition / 1000
+            delay(1_000)
         }
     }
 
@@ -258,15 +300,29 @@ fun LivePlayerScreen(
         }
     }
 
-    LaunchedEffect(index, useHls, retryTick) {
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(4_000)
+            notice = null
+        }
+    }
+
+    LaunchedEffect(index, useHls, retryTick, shiftStart, shiftTick) {
         error = null
-        val ext = if (useHls) "m3u8" else "ts"
-        val item = MediaItem.Builder()
-            .setUri(urlFor(channel, ext))
-            .apply { if (useHls) setMimeType(MimeTypes.APPLICATION_M3U8) }
-            .build()
+        val start = shiftStart
+        val shiftUrl = start?.let { timeshiftUrl(channel, it) }
+        val item = if (shiftUrl != null) {
+            MediaItem.fromUri(shiftUrl)
+        } else {
+            val ext = if (useHls) "m3u8" else "ts"
+            MediaItem.Builder()
+                .setUri(urlFor(channel, ext))
+                .apply { if (useHls) setMimeType(MimeTypes.APPLICATION_M3U8) }
+                .build()
+        }
         player.setMediaItem(item)
         player.prepare()
+        player.playWhenReady = !paused
     }
 
     LaunchedEffect(index) {
@@ -276,8 +332,26 @@ fun LivePlayerScreen(
     // Le programme en cours vient de se terminer : on recharge le guide
     LaunchedEffect(clockTick) { if (programs.isNotEmpty() && current == null) onRequestEpg(channel) }
 
-    LaunchedEffect(index, showInfo) {
-        if (showInfo) {
+    // Bilan de visionnage : secondes réellement regardées sur cette chaîne
+    LaunchedEffect(index) {
+        val watched = channel
+        var seconds = 0L
+        try {
+            while (true) {
+                delay(1_000)
+                if (player.isPlaying) seconds++
+                if (seconds >= 60) {
+                    onWatched(watched, seconds)
+                    seconds = 0
+                }
+            }
+        } finally {
+            if (seconds > 0) onWatched(watched, seconds)
+        }
+    }
+
+    LaunchedEffect(index, showInfo, controlsOpen, paused) {
+        if (showInfo && !controlsOpen && !paused) {
             delay(5_000)
             showInfo = false
         }
@@ -290,12 +364,61 @@ fun LivePlayerScreen(
         useHls = false
         retries = 0
         pendingRetry = false
+        shiftStart = null
+        paused = false
+        pausedAt = null
         showInfo = true
     }
 
     fun zap(delta: Int) {
         if (channels.size < 2) return
         goTo((index + delta).mod(channels.size))
+    }
+
+    fun pause() {
+        if (paused) return
+        pausedAt = playbackTs()
+        paused = true
+        player.pause()
+        showInfo = true
+    }
+
+    fun resume() {
+        if (!paused) return
+        val at = pausedAt
+        paused = false
+        pausedAt = null
+        val now = System.currentTimeMillis() / 1000
+        if (at != null && hasArchive && now - at > SHORT_PAUSE_S) {
+            // Longue pause : on reprend en différé depuis le moment de la pause (à la minute près)
+            shiftStart = (at / 60) * 60
+            shiftTick++
+        } else {
+            player.play()
+            if (!hasArchive && at != null && now - at > SHORT_PAUSE_S) {
+                notice = "Pas de replay sur cette chaîne : la pause peut revenir au direct"
+            }
+        }
+    }
+
+    fun rewind(minutes: Int) {
+        if (!hasArchive) {
+            notice = "Retour en arrière impossible : pas de replay sur cette chaîne"
+            return
+        }
+        val now = System.currentTimeMillis() / 1000
+        val oldest = now - channel.archiveDays * 86_400L
+        val target = (playbackTs() - minutes * 60L).coerceAtLeast(oldest)
+        paused = false
+        pausedAt = null
+        shiftStart = (target / 60) * 60
+        shiftTick++
+    }
+
+    fun goLive() {
+        paused = false
+        pausedAt = null
+        if (shiftStart != null) shiftStart = null else player.play()
     }
 
     // Saisie d'un numéro : on attend la fin de la frappe, puis on cherche dans la liste, sinon partout
@@ -318,18 +441,37 @@ fun LivePlayerScreen(
     }
 
     val focus = remember { FocusRequester() }
+    val controlsFocus = remember { FocusRequester() }
+
+    LaunchedEffect(controlsOpen) {
+        if (controlsOpen) {
+            withFrameNanos { }
+            runCatching { controlsFocus.requestFocus() }
+        }
+    }
+
+    fun closeControls() {
+        controlsOpen = false
+        runCatching { focus.requestFocus() }
+    }
 
     BackHandler(enabled = listOpen) {
         listOpen = false
         runCatching { focus.requestFocus() }
     }
-    BackHandler(enabled = !listOpen && digits.isNotEmpty()) { digits = "" }
+    BackHandler(enabled = !listOpen && controlsOpen) { closeControls() }
+    BackHandler(enabled = !listOpen && !controlsOpen && digits.isNotEmpty()) { digits = "" }
 
     KeyCatcher(focus, onKey = { ev ->
         val digit = digitOf(ev.key)
         when {
-            // Liste ouverte : les flèches servent à y naviguer
-            listOpen -> false
+            ev.key == Key.MediaPlayPause -> { if (paused) resume() else pause(); true }
+            ev.key == Key.MediaPause -> { pause(); true }
+            ev.key == Key.MediaPlay -> { resume(); true }
+            ev.key == Key.MediaRewind -> { rewind(1); true }
+            ev.key == Key.MediaFastForward -> { goLive(); true }
+            // Liste ou barre de commandes ouverte : les flèches servent à y naviguer
+            listOpen || controlsOpen -> false
             digit != null -> {
                 if (digits.length < 4) digits += digit
                 true
@@ -341,10 +483,12 @@ fun LivePlayerScreen(
                 true
             }
             ev.key == Key.DirectionRight || ev.key == Key.Guide -> { listOpen = true; true }
-            ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter || ev.key == Key.Info -> {
-                showInfo = !showInfo
+            ev.key == Key.DirectionCenter || ev.key == Key.Enter || ev.key == Key.NumPadEnter -> {
+                controlsOpen = true
+                showInfo = true
                 true
             }
+            ev.key == Key.Info -> { showInfo = !showInfo; true }
             else -> false
         }
     }) {
@@ -353,9 +497,36 @@ fun LivePlayerScreen(
 
             when {
                 error != null -> ErrorBox(error!!, "↑ / ↓ pour changer de chaîne", Modifier.align(Alignment.Center))
+                paused -> Box(
+                    Modifier.align(Alignment.Center).size(80.dp).background(Glass, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("❚❚", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
                 pendingRetry || (retries > 0 && buffering) -> StatusText("Reconnexion…", Modifier.align(Alignment.Center))
                 buffering -> StatusText("Chargement…", Modifier.align(Alignment.Center))
             }
+
+            // Différé : retard sur le direct, en haut à gauche
+            if (delaySec != null || paused) {
+                val label = when {
+                    paused -> "❚❚  En pause"
+                    delaySec != null && delaySec >= 60 -> "⏪  Différé · −${delaySec / 60} min"
+                    else -> "⏪  Différé"
+                }
+                Text(
+                    label,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(top = 32.dp, start = 48.dp)
+                        .background(Glass, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+
+            notice?.let { StatusText(it, Modifier.align(Alignment.TopCenter).padding(top = 32.dp)) }
 
             // Numéro en cours de saisie
             val digitsText = if (digits.isNotEmpty()) digits + "_" else digitsError
@@ -373,66 +544,98 @@ fun LivePlayerScreen(
             }
 
             AnimatedVisibility(
-                visible = showInfo && !listOpen,
+                visible = (showInfo || controlsOpen) && !listOpen,
                 enter = fadeIn(),
                 exit = fadeOut(),
                 modifier = Modifier.align(Alignment.BottomStart),
             ) {
-                Row(
-                    Modifier
-                        .padding(start = 48.dp, end = 48.dp, bottom = 32.dp)
-                        .widthIn(max = 620.dp)
-                        .background(Glass, RoundedCornerShape(18.dp))
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                Column(
+                    Modifier.padding(start = 48.dp, end = 48.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Box(
-                        Modifier.size(width = 88.dp, height = 50.dp).background(Color(0x1AFFFFFF), RoundedCornerShape(12.dp)),
-                        contentAlignment = Alignment.Center,
+                    Row(
+                        Modifier
+                            .widthIn(max = 620.dp)
+                            .background(Glass, RoundedCornerShape(18.dp))
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        if (channel.icon != null) {
-                            AsyncImage(
-                                model = channel.icon,
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = Modifier.fillMaxSize().padding(8.dp),
-                            )
-                        }
-                    }
-                    Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            listOfNotNull(channel.number.takeIf { it.isNotBlank() }, channel.name).joinToString("  ·  "),
-                            color = TextSecondary,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            current?.title ?: channel.name,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        if (current != null) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text("${hhmm(current.startTs)} – ${hhmm(current.stopTs)}", color = TextSecondary, fontSize = 12.sp)
-                                Box(Modifier.size(width = 120.dp, height = 4.dp).background(Color(0x4DFFFFFF), CircleShape)) {
-                                    Box(Modifier.fillMaxWidth(current.progress(nowSec)).fillMaxHeight().background(Color.White, CircleShape))
-                                }
+                        Box(
+                            Modifier.size(width = 88.dp, height = 50.dp).background(Color(0x1AFFFFFF), RoundedCornerShape(12.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (channel.icon != null) {
+                                AsyncImage(
+                                    model = channel.icon,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                                )
                             }
                         }
-                        if (next != null) {
+                        Column(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                "Ensuite · ${hhmm(next.startTs)}  ${next.title}",
+                                listOfNotNull(channel.number.takeIf { it.isNotBlank() }, channel.name).joinToString("  ·  "),
                                 color = TextSecondary,
                                 fontSize = 12.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            Text(
+                                current?.title ?: channel.name,
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (current != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Text("${hhmm(current.startTs)} – ${hhmm(current.stopTs)}", color = TextSecondary, fontSize = 12.sp)
+                                    Box(Modifier.size(width = 120.dp, height = 4.dp).background(Color(0x4DFFFFFF), CircleShape)) {
+                                        Box(Modifier.fillMaxWidth(current.progress(nowSec)).fillMaxHeight().background(Color.White, CircleShape))
+                                    }
+                                }
+                            }
+                            if (next != null) {
+                                Text(
+                                    "Ensuite · ${hhmm(next.startTs)}  ${next.title}",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (!controlsOpen) {
+                                Text("OK commandes  ·  ↑↓ zapper  ·  ← précédente  ·  → liste  ·  0-9 numéro", color = Color(0x80FFFFFF), fontSize = 10.sp)
+                            }
                         }
-                        Text("↑↓ zapper  ·  ← précédente  ·  → liste  ·  0-9 numéro", color = Color(0x80FFFFFF), fontSize = 10.sp)
+                    }
+
+                    if (controlsOpen) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ChipButton(
+                                label = if (paused) "▶  Reprendre" else "❚❚  Pause",
+                                selected = false,
+                                onClick = { if (paused) resume() else pause() },
+                                modifier = Modifier.focusRequester(controlsFocus),
+                            )
+                            if (hasArchive) {
+                                ChipButton("⏪  −1 min", selected = false, onClick = { rewind(1) })
+                                ChipButton("⏪  −5 min", selected = false, onClick = { rewind(5) })
+                            }
+                            if (shiftStart != null || paused) {
+                                ChipButton("⏩  Direct", selected = false, onClick = { goLive() })
+                            }
+                            ChipButton("▦  Multi-écran", selected = false, onClick = {
+                                closeControls()
+                                onMultiView(channel)
+                            })
+                            ChipButton("☰  Chaînes", selected = false, onClick = {
+                                controlsOpen = false
+                                listOpen = true
+                            })
+                        }
                     }
                 }
             }
@@ -560,6 +763,7 @@ fun VodPlayerScreen(
     onNext: (() -> Unit)?,
     onSavePosition: (positionMs: Long, durationMs: Long) -> Unit,
     onFinished: () -> Unit,
+    onWatched: (seconds: Long) -> Unit,
 ) {
     val player = rememberIptvPlayer()
     var playing by remember { mutableStateOf(true) }
@@ -622,6 +826,23 @@ fun VodPlayerScreen(
             delay(2_000)
             pendingRetry = false
             player.prepare()
+        }
+    }
+
+    // Bilan de visionnage : secondes réellement regardées
+    LaunchedEffect(Unit) {
+        var seconds = 0L
+        try {
+            while (true) {
+                delay(1_000)
+                if (player.isPlaying) seconds++
+                if (seconds >= 60) {
+                    onWatched(seconds)
+                    seconds = 0
+                }
+            }
+        } finally {
+            if (seconds > 0) onWatched(seconds)
         }
     }
 

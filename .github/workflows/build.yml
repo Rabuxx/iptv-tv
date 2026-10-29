@@ -5,6 +5,7 @@ name: Build APK
 # - push of a tag v*             -> tests + APK built with the tag version and published as a GitHub Release
 #                                   (the app checks this Release to update itself)
 # If the tests fail, no APK and no Release are produced.
+# Tags with a dash (v0.7.0-beta.1) are published as pre-releases: only the "beta" channel of the app sees them.
 on:
   push:
     branches: [main]
@@ -23,18 +24,21 @@ jobs:
       IPTV_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       IPTV_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       IPTV_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      # Optional services (empty = feature disabled in the app)
+      TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+      SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # full history: needed to write the release notes
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Version from tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -57,7 +61,7 @@ jobs:
 
       - name: Test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-report
           path: app/build/reports/tests/
@@ -69,7 +73,7 @@ jobs:
 
       - name: Lint report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
@@ -86,7 +90,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "rabux-tv.apk"
           echo "APK_FILE=rabux-tv-${VERSION}.apk" >> "$GITHUB_ENV"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.APK_FILE }}
           path: ${{ env.APK_FILE }}
@@ -103,9 +107,49 @@ jobs:
 
       - name: Publish the Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             ${{ env.APK_FILE }}
             rabux-tv.apk
+
+  ui-tests:
+    # Interface tests on an Android emulator. Separate job: a flaky emulator never blocks a release.
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Enable KVM (hardware acceleration for the emulator)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Interface tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: chmod +x gradlew && ./gradlew connectedDebugAndroidTest --no-daemon
+
+      - name: Interface test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-test-report
+          path: app/build/reports/androidTests/
+          if-no-files-found: ignore

@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.data.Credentials
+import fr.rabuxx.iptvtv.data.PhoneLinkMode
 
 @Composable
 fun LoginScreen(
@@ -36,6 +37,7 @@ fun LoginScreen(
     loading: Boolean,
     error: String?,
     onSubmit: (Credentials) -> Unit,
+    onPhoneForm: (Map<String, String>) -> Unit,
 ) {
     var server by rememberSaveable { mutableStateOf(initial?.server ?: "") }
     var username by rememberSaveable { mutableStateOf(initial?.username ?: "") }
@@ -51,7 +53,19 @@ fun LoginScreen(
         return
     }
 
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // Saisie depuis le téléphone : les champs se remplissent et la connexion part toute seule
+    val phoneUrl = rememberPhoneLinkUrl(PhoneLinkMode.Login) { form ->
+        server = form["server"].orEmpty()
+        username = form["username"].orEmpty()
+        password = form["password"].orEmpty()
+        onPhoneForm(form)
+    }
+
+    Row(
+        Modifier.fillMaxSize(),
+        horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Column(
             modifier = Modifier
                 .width(440.dp)
@@ -113,5 +127,7 @@ fun LoginScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+
+        PhoneLinkCard(url = phoneUrl, title = "Ou depuis ton téléphone", modifier = Modifier.width(300.dp))
     }
 }

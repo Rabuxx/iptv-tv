@@ -102,6 +102,16 @@ fun HomeContent(state: UiState, vm: MainViewModel, restore: Boolean, onRestored:
             }
         }
 
+        // Recommandations TMDB disponibles chez le fournisseur
+        state.becauseYouWatched.forEachIndexed { i, row ->
+            if (row.movies.isNotEmpty()) item("byw-m-$i") {
+                MovieShelf("Parce que tu as regardé ${row.title}", "bm$i", row.movies, state, vm, focus)
+            }
+            if (row.series.isNotEmpty()) item("byw-s-$i") {
+                SeriesShelf("Parce que tu as regardé ${row.title}", "bs$i", row.series, state, vm, focus)
+            }
+        }
+
         if (fav.channels.isNotEmpty()) item("fav-live") {
             ChannelShelf("Chaînes favorites", "fl", fav.channels, state, vm, focus)
         }

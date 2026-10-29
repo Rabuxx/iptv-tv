@@ -15,6 +15,11 @@ class DiskCache(context: Context) {
     fun read(key: String): String? =
         runCatching { file(key).takeIf { it.exists() }?.readText() }.getOrNull()
 
+    /** Contenu en cache s'il a moins de [maxAgeMs], sinon null. */
+    fun readFresh(key: String, maxAgeMs: Long): String? = runCatching {
+        file(key).takeIf { it.exists() && System.currentTimeMillis() - it.lastModified() < maxAgeMs }?.readText()
+    }.getOrNull()
+
     fun write(key: String, body: String) {
         runCatching {
             val target = file(key)

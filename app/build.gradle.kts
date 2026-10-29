@@ -11,11 +11,27 @@ plugins {
 val appVersion: String = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() }
     ?: (project.findProperty("iptv.version") as String? ?: "0.0.0")
 
-// 0.3.1 → 301 ; 1.2.10 → 10210 : le code de version suit toujours le nom de version
-val appVersionCode: Int = appVersion.split('.', '-')
-    .map { it.toIntOrNull() ?: 0 }
-    .let { p -> p.getOrElse(0) { 0 } * 10_000 + p.getOrElse(1) { 0 } * 100 + p.getOrElse(2) { 0 } }
-    .coerceAtLeast(1)
+// Code de version toujours croissant, bêtas comprises (même formule que Versions.versionCode) :
+// 0.7.0-beta.2 → 70002, 0.7.0 → 70099, 0.7.1 → 70199
+val appVersionCode: Int = run {
+    val core = appVersion.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+    val base = core.getOrElse(0) { 0 } * 10_000 + core.getOrElse(1) { 0 } * 100 + core.getOrElse(2) { 0 }
+    val pre = if ('-' in appVersion) {
+        (appVersion.substringAfterLast('.').toIntOrNull() ?: 1).coerceIn(1, 98)
+    } else {
+        99
+    }
+    (base * 100 + pre).coerceAtLeast(1)
+}
+
+// ---------- Clés de services (facultatives) ----------
+// En CI : secrets GitHub TMDB_API_KEY et SENTRY_DSN. En local : local.properties (non versionné).
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun secret(name: String): String =
+    (System.getenv(name) ?: localProps.getProperty(name) ?: "").replace("\"", "").trim()
 
 // ---------- Signature ----------
 // Une clé stable est indispensable pour que les mises à jour s'installent par-dessus l'ancienne version.
@@ -40,6 +56,10 @@ android {
 
         val updateRepo = project.findProperty("iptv.updateRepo") as String? ?: "Rabuxx/iptv-tv"
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
+        buildConfigField("String", "TMDB_API_KEY", "\"${secret("TMDB_API_KEY")}\"")
+        buildConfigField("String", "SENTRY_DSN", "\"${secret("SENTRY_DSN")}\"")
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -114,6 +134,19 @@ dependencies {
     // Rangée « À suivre » de l'écran d'accueil Android TV
     implementation("androidx.tvprovider:tvprovider:1.0.0")
 
+    // QR code (connexion depuis le téléphone)
+    implementation("com.google.zxing:core:3.5.3")
+
+    // Rapports de plantage (actifs seulement si un DSN Sentry est fourni)
+    implementation("io.sentry:sentry-android:7.14.0")
+
     // Tests unitaires (JVM)
     testImplementation("junit:junit:4.13.2")
+
+    // Tests d'interface (émulateur, en CI)
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

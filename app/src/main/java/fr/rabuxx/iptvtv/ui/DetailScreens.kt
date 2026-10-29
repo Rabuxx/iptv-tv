@@ -2,6 +2,19 @@ package fr.rabuxx.iptvtv.ui
 
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.style.TextAlign
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
+import fr.rabuxx.iptvtv.TmdbView
+import fr.rabuxx.iptvtv.data.CastMember
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -124,17 +137,25 @@ fun MovieDetailScreen(
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     onPlay: (extension: String?, fromStart: Boolean) -> Unit,
+    tmdb: TmdbView?,
+    onTrailer: (String) -> Unit,
+    onOpenMovie: (Movie) -> Unit,
 ) {
     val info = detail.data
+    val extra = tmdb?.details
     val playFocus = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         withFrameNanos { }
         runCatching { playFocus.requestFocus() }
     }
 
-    Box(Modifier.fillMaxSize()) {
-        Backdrop(info?.backdrop, info?.poster ?: movie.poster)
-
+    DetailScaffold(
+        backdrop = info?.backdrop ?: extra?.backdrop,
+        fallbackPoster = info?.poster ?: movie.poster ?: extra?.poster,
+        tmdb = tmdb,
+        onOpenMovie = onOpenMovie,
+        onOpenSeries = {},
+    ) {
         Column(
             Modifier
                 .align(Alignment.BottomStart)
@@ -146,14 +167,14 @@ fun MovieDetailScreen(
             MetaLine(
                 listOf(
                     info?.year,
-                    info?.genre,
+                    info?.genre ?: extra?.genres?.take(3)?.joinToString(", "),
                     formatDuration(info?.duration),
-                    formatRating(info?.rating ?: movie.rating),
+                    formatRating(info?.rating ?: movie.rating ?: extra?.rating?.toString()),
                 ),
             )
             when {
                 detail.loading -> Text("Chargement des informations…", color = TextSecondary, fontSize = 13.sp)
-                info != null -> Plot(info.plot, maxLines = 4)
+                else -> Plot(info?.plot ?: extra?.overview, maxLines = 4)
             }
 
             Spacer(Modifier.height(6.dp))
@@ -173,11 +194,14 @@ fun MovieDetailScreen(
                         modifier = Modifier.focusRequester(playFocus),
                     )
                 }
+                extra?.trailerKey?.let { key -> ActionButton("Bande-annonce", onClick = { onTrailer(key) }) }
                 ActionButton(if (isFavorite) "★  Favori" else "☆  Favoris", onClick = onToggleFavorite)
             }
 
             info?.director?.let { Text("Réalisation : $it", color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            info?.cast?.let { Text("Avec : $it", color = TextSecondary, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            if (extra?.cast.isNullOrEmpty()) {
+                info?.cast?.let { Text("Avec : $it", color = TextSecondary, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+            }
         }
     }
 }
@@ -193,8 +217,12 @@ fun SeriesDetailScreen(
     onToggleFavorite: () -> Unit,
     progressOf: (Episode) -> Float,
     onPlay: (Episode) -> Unit,
+    tmdb: TmdbView?,
+    onTrailer: (String) -> Unit,
+    onOpenSeries: (Series) -> Unit,
 ) {
     val info = detail.data
+    val extra = tmdb?.details
     val seasons = info?.episodes?.keys?.toList().orEmpty()
 
     // Saison choisie et dernier épisode lancé : conservés quand on revient du lecteur
@@ -223,9 +251,13 @@ fun SeriesDetailScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
-        Backdrop(info?.backdrop ?: series.backdrop, series.cover)
-
+    DetailScaffold(
+        backdrop = info?.backdrop ?: series.backdrop ?: extra?.backdrop,
+        fallbackPoster = series.cover ?: extra?.poster,
+        tmdb = tmdb,
+        onOpenMovie = {},
+        onOpenSeries = onOpenSeries,
+    ) {
         Column(
             Modifier
                 .align(Alignment.BottomStart)
@@ -241,13 +273,16 @@ fun SeriesDetailScreen(
                 MetaLine(
                     listOf(
                         info?.year ?: series.year,
-                        info?.genre ?: series.genre,
+                        info?.genre ?: series.genre ?: extra?.genres?.take(3)?.joinToString(", "),
                         seasons.size.takeIf { it > 0 }?.let { if (it > 1) "$it saisons" else "1 saison" },
                         formatRating(info?.rating ?: series.rating),
                     ),
                 )
-                Plot(info?.plot ?: series.plot, maxLines = 3)
-                ActionButton(if (isFavorite) "★  Favori" else "☆  Favoris", onClick = onToggleFavorite)
+                Plot(info?.plot ?: series.plot ?: extra?.overview, maxLines = 3)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ActionButton(if (isFavorite) "★  Favori" else "☆  Favoris", onClick = onToggleFavorite)
+                    extra?.trailerKey?.let { key -> ActionButton("Bande-annonce", onClick = { onTrailer(key) }) }
+                }
             }
 
             when {
@@ -294,6 +329,125 @@ fun SeriesDetailScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ============================== Fiche : structure commune + TMDB ==============================
+
+/**
+ * Fiche plein écran sur l'image de fond ; en descendant, le casting et les recommandations TMDB
+ * disponibles chez le fournisseur. Le fond reste fixe pendant le défilement.
+ */
+@Composable
+private fun DetailScaffold(
+    backdrop: String?,
+    fallbackPoster: String?,
+    tmdb: TmdbView?,
+    onOpenMovie: (Movie) -> Unit,
+    onOpenSeries: (Series) -> Unit,
+    hero: @Composable BoxScope.() -> Unit,
+) {
+    Box(Modifier.fillMaxSize()) {
+        Backdrop(backdrop, fallbackPoster)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val screenHeight = maxHeight
+            LazyColumn(Modifier.fillMaxSize()) {
+                item("hero") { Box(Modifier.fillMaxWidth().height(screenHeight), content = hero) }
+                val cast = tmdb?.details?.cast.orEmpty()
+                if (cast.isNotEmpty()) {
+                    item("cast") {
+                        Shelf("Casting") {
+                            itemsIndexed(cast, key = { i, c -> "${c.name}-$i" }) { _, member -> CastCard(member) }
+                        }
+                    }
+                }
+                val movies = tmdb?.availableMovies.orEmpty()
+                val series = tmdb?.availableSeries.orEmpty()
+                if (movies.isNotEmpty() || series.isNotEmpty()) {
+                    item("recs") {
+                        Shelf("Dans la même veine · disponibles chez toi") {
+                            itemsIndexed(movies, key = { i, m -> "m${m.streamId}-$i" }) { _, m ->
+                                MediaCard(
+                                    title = m.name,
+                                    image = m.poster,
+                                    modifier = Modifier.width(PosterWidth),
+                                    onClick = { onOpenMovie(m) },
+                                )
+                            }
+                            itemsIndexed(series, key = { i, sr -> "s${sr.seriesId}-$i" }) { _, sr ->
+                                MediaCard(
+                                    title = sr.name,
+                                    image = sr.cover,
+                                    subtitle = sr.year,
+                                    modifier = Modifier.width(PosterWidth),
+                                    onClick = { onOpenSeries(sr) },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (cast.isNotEmpty() || movies.isNotEmpty() || series.isNotEmpty()) {
+                    item("tmdb-credit") {
+                        Text(
+                            "Informations complémentaires : TMDB",
+                            modifier = Modifier.padding(start = 48.dp, top = 8.dp, bottom = 32.dp),
+                            color = Color(0x66FFFFFF),
+                            fontSize = 10.sp,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Acteur : photo ronde, nom et rôle. Focusable pour pouvoir faire défiler la rangée à la télécommande. */
+@Composable
+private fun CastCard(member: CastMember) {
+    var focused by remember { mutableStateOf(false) }
+    Surface(
+        onClick = {},
+        modifier = Modifier.width(104.dp).onFocusChanged { focused = it.isFocused },
+        shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = Color.Transparent,
+            contentColor = TextPrimary,
+            focusedContainerColor = Color(0x26FFFFFF),
+            focusedContentColor = TextPrimary,
+        ),
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+    ) {
+        Column(
+            Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                Modifier.size(76.dp).clip(CircleShape).background(Card),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(member.name.take(1), fontSize = 24.sp, color = TextSecondary)
+                if (member.photo != null) {
+                    AsyncImage(
+                        model = member.photo,
+                        contentDescription = member.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+            Text(
+                member.name,
+                fontSize = 11.sp,
+                fontWeight = if (focused) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+            member.role?.let {
+                Text(it, fontSize = 10.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
             }
         }
     }
