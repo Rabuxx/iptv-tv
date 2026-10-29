@@ -135,7 +135,7 @@ dependencies {
     implementation("androidx.tvprovider:tvprovider:1.0.0")
 
     // QR code (connexion depuis le téléphone)
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
     // Rapports de plantage (actifs seulement si un DSN Sentry est fourni)
     implementation("io.sentry:sentry-android:7.14.0")
