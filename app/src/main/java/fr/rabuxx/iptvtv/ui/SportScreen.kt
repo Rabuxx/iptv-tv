@@ -14,12 +14,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,9 +59,13 @@ fun SportScreen(
     onReload: () -> Unit,
     hasReminder: (SportProgram) -> Boolean,
     onToggleReminder: (SportProgram) -> Unit,
-    onMultiView: (List<Channel>) -> Unit,
+    onMultiView: ((List<Channel>) -> Unit)?,
 ) {
     val data = detail.data
+    // Filtre par chaîne : « Tout », « Canal+ », « beIN Sports »…
+    var group by rememberSaveable { mutableStateOf("") }
+    val live = data?.live.orEmpty().filter { group.isEmpty() || it.group == group }
+    val upcoming = data?.upcoming.orEmpty().filter { group.isEmpty() || it.group == group }
     val firstFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
 
@@ -80,7 +90,7 @@ fun SportScreen(
                     fontSize = 13.sp,
                 )
             }
-            if (data != null && data.live.isNotEmpty()) {
+            if (onMultiView != null && data != null && data.live.isNotEmpty()) {
                 ChipButton(
                     label = "▦ Multi-écran",
                     selected = false,
@@ -104,38 +114,69 @@ fun SportScreen(
             data.live.isEmpty() && data.upcoming.isEmpty() -> CenteredMessage(
                 "Le guide TV de tes chaînes sport est vide.\nTon fournisseur ne le renseigne peut-être pas.",
             )
-            else -> LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = 16.dp, bottom = 40.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                if (data.live.isNotEmpty()) {
-                    item("live-title") { GroupTitle("En direct") }
-                    itemsIndexed(data.live, key = { i, p -> "live-${p.channel.streamId}-$i" }) { i, p ->
-                        SportRow(
-                            p = p,
-                            live = true,
-                            modifier = if (i == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                            onClick = { onPlay(data.channels, data.channels.indexOf(p.channel).coerceAtLeast(0)) },
-                        )
+            else -> Column {
+                if (data.groups.size > 1) {
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(top = 12.dp),
+                    ) {
+                        item { ChipButton(label = "Tout", selected = group.isEmpty(), onClick = { group = "" }) }
+                        items(data.groups) { g -> ChipButton(label = g, selected = group == g, onClick = { group = g }) }
                     }
                 }
-                if (data.upcoming.isNotEmpty()) {
-                    item("next-title") { GroupTitle("À venir") }
-                    itemsIndexed(data.upcoming, key = { i, p -> "next-${p.channel.streamId}-${p.program.startTs}-$i" }) { i, p ->
-                        SportRow(
-                            p = p,
-                            live = false,
-                            reminder = hasReminder(p),
-                            modifier = if (data.live.isEmpty() && i == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                            onClick = { onPlay(data.channels, data.channels.indexOf(p.channel).coerceAtLeast(0)) },
-                            onLongClick = { onToggleReminder(p) },
-                        )
+                LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(start = 48.dp, end = 48.dp, top = 16.dp, bottom = 40.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (live.isEmpty() && upcoming.isEmpty()) {
+                        item("none") { Text("Rien sur ces chaînes dans les 12 prochaines heures.", color = TextSecondary, fontSize = 14.sp) }
+                    }
+                    if (live.isNotEmpty()) {
+                        item("live-title") { GroupTitle("En direct") }
+                        itemsIndexed(live, key = { i, p -> "live-${p.channel.streamId}-$i" }) { i, p ->
+                            SportRow(
+                                p = p,
+                                live = true,
+                                modifier = if (i == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                                onClick = { onPlay(data.channels, data.channels.indexOf(p.channel).coerceAtLeast(0)) },
+                            )
+                        }
+                    }
+                    if (upcoming.isNotEmpty()) {
+                        // Regroupé par heure de début : « 21:00 », plusieurs matchs en même temps restent ensemble
+                        var lastHour = ""
+                        upcoming.forEachIndexed { i, p ->
+                            val hour = dayAndHour(p.program.startTs)
+                            if (hour != lastHour) {
+                                lastHour = hour
+                                item("next-title-$i") { GroupTitle(hour) }
+                            }
+                            item("next-${p.channel.streamId}-${p.program.startTs}-$i") {
+                                SportRow(
+                                    p = p,
+                                    live = false,
+                                    reminder = hasReminder(p),
+                                    modifier = if (live.isEmpty() && i == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                                    onClick = { onPlay(data.channels, data.channels.indexOf(p.channel).coerceAtLeast(0)) },
+                                    onLongClick = { onToggleReminder(p) },
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** « À 21:00 », ou « Demain à 01:00 » après minuit. */
+private fun dayAndHour(ts: Long): String {
+    val day = SimpleDateFormat("yyyyMMdd", Locale.FRANCE)
+    val today = day.format(Date())
+    val time = SimpleDateFormat("HH:mm", Locale.FRANCE).format(Date(ts * 1000))
+    return if (day.format(Date(ts * 1000)) == today) "À $time" else "Demain à $time"
 }
 
 @Composable
@@ -199,7 +240,7 @@ private fun SportRow(
             Column(Modifier.weight(1f)) {
                 Text(p.program.title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(
-                    p.channel.name + if (live) "  ·  jusqu'à ${clock(p.program.stopTs)}" else "",
+                    p.label + if (live) "  ·  jusqu'à ${clock(p.program.stopTs)}" else "",
                     fontSize = 12.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

@@ -188,7 +188,8 @@ fun LivePlayerScreen(
     onZapped: (Int) -> Unit,
     onJumpToNumber: (String) -> Boolean,
     onWatched: (Channel, Long) -> Unit,
-    onMultiView: (Channel) -> Unit,
+    /** Null quand l'abonnement n'autorise qu'une connexion. */
+    onMultiView: ((Channel) -> Unit)?,
 ) {
     val player = rememberIptvPlayer()
     var index by remember { mutableIntStateOf(startIndex.coerceIn(channels.indices)) }
@@ -627,10 +628,12 @@ fun LivePlayerScreen(
                             if (shiftStart != null || paused) {
                                 ChipButton("⏩  Direct", selected = false, onClick = { goLive() })
                             }
-                            ChipButton("▦  Multi-écran", selected = false, onClick = {
-                                closeControls()
-                                onMultiView(channel)
-                            })
+                            if (onMultiView != null) {
+                                ChipButton("▦  Multi-écran", selected = false, onClick = {
+                                    closeControls()
+                                    onMultiView(channel)
+                                })
+                            }
                             ChipButton("☰  Chaînes", selected = false, onClick = {
                                 controlsOpen = false
                                 listOpen = true

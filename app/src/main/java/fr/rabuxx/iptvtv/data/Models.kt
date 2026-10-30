@@ -178,13 +178,22 @@ fun EpgProgram.progress(nowSec: Long = System.currentTimeMillis() / 1000): Float
     if (stopTs <= startTs) 0f else ((nowSec - startTs).toFloat() / (stopTs - startTs)).coerceIn(0f, 1f)
 
 /** Programme d'une page « Sport ce soir ». */
-data class SportProgram(val channel: Channel, val program: EpgProgram)
+data class SportProgram(
+    val channel: Channel,
+    val program: EpgProgram,
+    /** Nom propre de la chaîne (« beIN Sports 1 ») au lieu de « FR| BEIN SPORTS 1 FHD ». */
+    val label: String = channel.name,
+    /** Groupe pour les filtres : « Canal+ », « beIN Sports »… */
+    val group: String = "",
+)
 
 data class SportTonight(
     val live: List<SportProgram> = emptyList(),
     val upcoming: List<SportProgram> = emptyList(),
     /** Chaînes sport utilisées, pour zapper de l'une à l'autre depuis le lecteur. */
     val channels: List<Channel> = emptyList(),
+    /** Groupes présents, dans l'ordre d'affichage des filtres. */
+    val groups: List<String> = emptyList(),
 )
 
 /** Clé de visibilité d'une catégorie : les identifiants Direct / Films / Séries peuvent se recouper. */

@@ -229,7 +229,7 @@ class MainActivity : ComponentActivity() {
                 onReload = vm::reloadSport,
                 hasReminder = { state.hasReminder(it.channel, it.program) },
                 onToggleReminder = { vm.toggleReminder(it.channel, it.program) },
-                onMultiView = { vm.openMultiView(it) },
+                onMultiView = if (state.multiViewAvailable) ({ list: List<fr.rabuxx.iptvtv.data.Channel> -> vm.openMultiView(list) }) else null,
             )
 
             Route.Stats -> StatsScreen(
@@ -276,7 +276,7 @@ class MainActivity : ComponentActivity() {
                             onZapped = { vm.onZapped(route, it) },
                             onJumpToNumber = vm::jumpToChannelNumber,
                             onWatched = vm::recordLive,
-                            onMultiView = { vm.openMultiView(listOf(it)) },
+                            onMultiView = if (state.multiViewAvailable) ({ ch: fr.rabuxx.iptvtv.data.Channel -> vm.openMultiView(listOf(ch)) }) else null,
                         )
                     }
                 }

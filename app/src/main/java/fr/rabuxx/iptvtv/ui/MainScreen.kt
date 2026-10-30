@@ -113,7 +113,7 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
                         section = Section.Live,
                         state = state,
                         onLongPressCategory = { vm.openCategoryOptions(Section.Live, it) },
-                        extraCategories = listOfNotNull(SportChip, MultiChip, FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
+                        extraCategories = listOfNotNull(SportChip, MultiChip.takeIf { state.multiViewAvailable }, FavoritesChip, ReplayChip.takeIf { state.hasReplay }),
                         columns = 4,
                         emptyText = when (state.live.selectedId) {
                             FAVORITES_CATEGORY -> "Aucune chaîne favorite.\nMaintiens OK sur une chaîne pour l'ajouter."

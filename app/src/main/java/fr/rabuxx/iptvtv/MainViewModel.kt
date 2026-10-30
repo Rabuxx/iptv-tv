@@ -37,6 +37,7 @@ import fr.rabuxx.iptvtv.data.WatchItem
 import fr.rabuxx.iptvtv.data.WatchStatsStore
 import fr.rabuxx.iptvtv.data.WatchType
 import fr.rabuxx.iptvtv.data.SPORT_CATEGORY
+import fr.rabuxx.iptvtv.data.SportChannels
 import fr.rabuxx.iptvtv.data.SportProgram
 import fr.rabuxx.iptvtv.data.SportTonight
 import fr.rabuxx.iptvtv.data.Versions
@@ -269,6 +270,9 @@ data class UiState(
         return key in lockedCategories && key !in unlockedCategories
     }
     val hasReplay: Boolean get() = library?.live?.any { it.archiveDays > 0 } == true
+
+    /** Le multi-écran ouvre un flux par case : inutile si l'abonnement n'autorise qu'une connexion. */
+    val multiViewAvailable: Boolean get() = (account?.maxStreams ?: 2) >= 2
 }
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -935,25 +939,46 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val live = _state.value.library?.live.orEmpty()
                 val categories = runCatching { c.liveCategories(cached = true) }.getOrNull()
                     ?: c.liveCategories(cached = false).orEmpty()
-                val sportFr = categories.filter { Ranking.isSport(it.name) && Ranking.isFrench(it.name) }.map { it.id }.toSet()
-                val sportAny = categories.filter { Ranking.isSport(it.name) }.map { it.id }.toSet()
-                val ids = sportFr.ifEmpty { sportAny }
-                val channels = live.filter { it.categoryId in ids }.take(SPORT_MAX_CHANNELS)
+                val catNames = categories.associate { it.id to it.name }
+                var picks = SportChannels.pick(live) { catNames[it] }
+                if (picks.isEmpty()) {
+                    // Aucune chaîne connue : repli sur les catégories sport, une version par chaîne
+                    val sportFr = categories.filter { Ranking.isSport(it.name) && Ranking.isFrench(it.name) }.map { it.id }.toSet()
+                    val sportAny = categories.filter { Ranking.isSport(it.name) }.map { it.id }.toSet()
+                    val ids = sportFr.ifEmpty { sportAny }
+                    picks = live.filter { it.categoryId in ids }
+                        .groupBy { SportChannels.key(it.name) }
+                        .map { (_, variants) ->
+                            val sorted = variants.sortedBy { SportChannels.qualityRank(it.name) }
+                            SportChannels.Pick(SportChannels.key(sorted.first().name), "", false, sorted, 0)
+                        }
+                        .take(SPORT_MAX_CHANNELS)
+                }
+                val channels = picks.map { it.channel }
 
                 val now = System.currentTimeMillis() / 1000
                 val horizon = now + SPORT_HORIZON_S
-                val results = channels.map { ch ->
+                // Guide de la meilleure version ; si elle n'en a pas, celui d'une autre version de la même chaîne
+                val results = picks.map { pick ->
                     async {
-                        ch to runCatching { epgSemaphore.withPermit { c.shortEpg(ch, limit = 12) } }.getOrDefault(emptyList())
+                        var programs = emptyList<EpgProgram>()
+                        for (variant in pick.variants.take(3)) {
+                            programs = runCatching { epgSemaphore.withPermit { c.shortEpg(variant, limit = 12) } }
+                                .getOrDefault(emptyList())
+                            if (programs.isNotEmpty()) break
+                        }
+                        pick to programs
                     }
                 }.awaitAll()
 
                 val fetchedAt = System.currentTimeMillis()
-                _epg.update { map -> map + results.map { (ch, p) -> ch.streamId to p } }
-                results.forEach { (ch, _) -> epgFetchedAt[ch.streamId] = fetchedAt }
+                _epg.update { map -> map + results.map { (p, programs) -> p.channel.streamId to programs } }
+                results.forEach { (p, _) -> epgFetchedAt[p.channel.streamId] = fetchedAt }
 
-                val all = results.flatMap { (ch, programs) ->
-                    programs.filter { it.startTs < horizon && it.stopTs > now }.map { SportProgram(ch, it) }
+                val all = results.flatMap { (pick, programs) ->
+                    programs
+                        .filter { it.startTs < horizon && it.stopTs > now && SportChannels.keep(it, pick.generalist) }
+                        .map { SportProgram(pick.channel, it, label = pick.label, group = pick.group) }
                 }
                 val order = channels.withIndex().associate { it.value.streamId to it.index }
                 _state.update {
@@ -963,9 +988,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                                 live = all.filter { p -> p.program.startTs <= now }
                                     .sortedBy { p -> order[p.channel.streamId] ?: 0 },
                                 upcoming = all.filter { p -> p.program.startTs > now }
-                                    .sortedBy { p -> p.program.startTs }
+                                    .sortedWith(compareBy({ p -> p.program.startTs }, { p -> order[p.channel.streamId] ?: 0 }))
                                     .take(SPORT_MAX_UPCOMING),
                                 channels = channels,
+                                groups = all.map { p -> p.group }.filter { g -> g.isNotEmpty() }.distinct()
+                                    .sortedBy { g -> SportChannels.GROUPS.indexOf(g) },
                             ),
                         ),
                     )
