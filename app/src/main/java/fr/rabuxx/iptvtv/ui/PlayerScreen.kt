@@ -74,7 +74,11 @@ import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.TransferListener
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
@@ -89,15 +93,26 @@ import fr.rabuxx.iptvtv.data.Channel
 import fr.rabuxx.iptvtv.data.USER_AGENT
 import kotlinx.coroutines.delay
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 // ============================== Commun ==============================
 
 /** Réglages des sous-titres, fournis par MainActivity à tous les lecteurs. */
 val LocalSubtitles = staticCompositionLocalOf { SubtitleSettings() }
 
+/** Octets reçus du serveur, pour mesurer le débit réel (panneau d'infos du lecteur). */
+class NetCounter {
+    val bytes = AtomicLong()
+}
+
+/**
+ * [vod] : films et séries. Réserve de lecture bien plus grande que les 50 s par défaut, pour encaisser
+ * les ralentissements des serveurs IPTV le soir ; après une coupure, on attend 10 s de réserve avant de
+ * repartir pour éviter les coupures en rafale. Le direct garde les réglages par défaut (moins de retard).
+ */
 @OptIn(UnstableApi::class)
 @Composable
-internal fun rememberIptvPlayer(): ExoPlayer {
+internal fun rememberIptvPlayer(vod: Boolean = false, counter: NetCounter? = null): ExoPlayer {
     val context = LocalContext.current
     val subtitles = LocalSubtitles.current
     return remember {
@@ -106,7 +121,28 @@ internal fun rememberIptvPlayer(): ExoPlayer {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(30_000)
-        ExoPlayer.Builder(context)
+        if (counter != null) {
+            http.setTransferListener(object : TransferListener {
+                override fun onTransferInitializing(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+                override fun onTransferStart(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+                override fun onBytesTransferred(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean, bytesTransferred: Int) {
+                    if (isNetwork) counter.bytes.addAndGet(bytesTransferred.toLong())
+                }
+                override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
+            })
+        }
+        val builder = ExoPlayer.Builder(context)
+        if (vod) {
+            builder.setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(VOD_MIN_BUFFER_MS, VOD_MAX_BUFFER_MS, 2_500, VOD_REBUFFER_MS)
+                    // Plafond mémoire : environ 3 min d'un épisode 1080p, moins pour un fichier 4K très lourd
+                    .setTargetBufferBytes(VOD_BUFFER_BYTES)
+                    .setPrioritizeTimeOverSizeThresholds(false)
+                    .build(),
+            )
+        }
+        builder
             .setMediaSourceFactory(DefaultMediaSourceFactory(http))
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
@@ -786,6 +822,10 @@ private fun hhmm(ts: Long) = java.text.SimpleDateFormat("HH:mm", Locale.FRANCE).
 // ============================== Films / épisodes / replay ==============================
 
 private const val VOD_MAX_RETRIES = 3
+private const val VOD_MIN_BUFFER_MS = 120_000
+private const val VOD_MAX_BUFFER_MS = 240_000
+private const val VOD_REBUFFER_MS = 10_000
+private const val VOD_BUFFER_BYTES = 128 * 1024 * 1024
 /** Le compte à rebours de l'épisode suivant démarre pendant le générique de fin. */
 private const val UP_NEXT_BEFORE_END_MS = 30_000L
 
@@ -811,8 +851,14 @@ fun VodPlayerScreen(
     onFinished: () -> Unit,
     onWatched: (seconds: Long) -> Unit,
 ) {
-    val player = rememberIptvPlayer()
+    val net = remember { NetCounter() }
+    val player = rememberIptvPlayer(vod = true, counter = net)
     var playing by remember { mutableStateOf(true) }
+    var everReady by remember { mutableStateOf(false) }
+    var stalls by remember { mutableIntStateOf(0) }
+    var infoOpen by remember { mutableStateOf(false) }
+    var info by remember { mutableStateOf(PlaybackInfo()) }
+    var buffered by remember { mutableLongStateOf(0L) }
     var buffering by remember { mutableStateOf(true) }
     var ended by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -835,7 +881,12 @@ fun VodPlayerScreen(
 
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY) retries = 0
+                // Coupure : la lecture attend des données alors qu'elle avait démarré
+                if (state == Player.STATE_BUFFERING && everReady) stalls++
+                if (state == Player.STATE_READY) {
+                    retries = 0
+                    everReady = true
+                }
                 if (state == Player.STATE_ENDED) ended = true
             }
 
@@ -898,9 +949,37 @@ fun VodPlayerScreen(
         }
     }
 
+    // Mesures pour le panneau d'infos : débit réel reçu (moyenne sur 5 s) et évolution de la réserve
+    LaunchedEffect(Unit) {
+        var lastBytes = net.bytes.get()
+        val rates = ArrayDeque<Long>()
+        val reserves = ArrayDeque<Long>()
+        while (true) {
+            delay(1_000)
+            val now = net.bytes.get()
+            rates.addLast(now - lastBytes)
+            lastBytes = now
+            if (rates.size > 5) rates.removeFirst()
+            val reserve = ((player.bufferedPosition - player.currentPosition) / 1000).coerceAtLeast(0)
+            reserves.addLast(reserve)
+            if (reserves.size > 6) reserves.removeFirst()
+            val format = player.videoFormat
+            info = PlaybackInfo(
+                receivedMbps = rates.sum() * 8.0 / rates.size / 1_000_000,
+                reserveSeconds = reserve,
+                reserveTrend = reserve - reserves.first(),
+                loading = player.isLoading,
+                video = format?.let { describeVideo(it) },
+                videoMbps = format?.bitrate?.takeIf { it > 0 }?.let { it / 1_000_000.0 },
+                stalls = stalls,
+            )
+        }
+    }
+
     // Rafraîchit la barre de progression
     LaunchedEffect(Unit) {
         while (true) {
+            buffered = player.bufferedPosition
             position = player.currentPosition
             duration = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
             delay(500)
@@ -978,13 +1057,17 @@ fun VodPlayerScreen(
                 Key.DirectionLeft, Key.MediaRewind -> { player.seekBack(); position = player.currentPosition; touch(); true }
                 Key.DirectionRight, Key.MediaFastForward -> { player.seekForward(); position = player.currentPosition; touch(); true }
                 Key.DirectionDown -> { tracksOpen = true; touch(); true }
-                Key.DirectionUp, Key.Info -> { touch(); true }
+                Key.DirectionUp, Key.Info -> { infoOpen = !infoOpen; touch(); true }
                 else -> false
             }
         }
     }) {
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player)
+
+            if (infoOpen) {
+                PlaybackInfoPanel(info, playing, Modifier.align(Alignment.TopEnd).padding(top = 24.dp, end = 32.dp))
+            }
 
             when {
                 error != null -> ErrorBox(error!!, "Retour pour revenir à la fiche", Modifier.align(Alignment.Center))
@@ -1029,12 +1112,20 @@ fun VodPlayerScreen(
                             .padding(start = 48.dp, end = 48.dp, top = 44.dp, bottom = 28.dp),
                     ) {
                         val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                        val bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
                         Box(
                             Modifier
                                 .fillMaxWidth()
                                 .height(6.dp)
                                 .background(Color(0x4DFFFFFF), CircleShape),
                         ) {
+                            // Réserve déjà téléchargée, en gris clair derrière la position
+                            Box(
+                                Modifier
+                                    .fillMaxWidth(bufferedFraction)
+                                    .fillMaxHeight()
+                                    .background(Color(0x80FFFFFF), CircleShape),
+                            )
                             Box(
                                 Modifier
                                     .fillMaxWidth(fraction)
@@ -1045,7 +1136,7 @@ fun VodPlayerScreen(
                         Spacer(Modifier.height(8.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(formatClock(position), color = Color(0xCCFFFFFF), fontSize = 13.sp)
-                            Text("↓  Audio et sous-titres", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                            Text("↑  Infos de lecture   ·   ↓  Audio et sous-titres", color = Color(0x99FFFFFF), fontSize = 12.sp)
                             Text(
                                 if (duration > 0) "-" + formatClock(duration - position) else "",
                                 color = Color(0xCCFFFFFF),
@@ -1081,6 +1172,78 @@ fun VodPlayerScreen(
                 }
             }
         }
+    }
+}
+
+// ============================== Infos de lecture ==============================
+
+/** Mesures affichées par le panneau d'infos (touche ↑ pendant un film ou un épisode). */
+data class PlaybackInfo(
+    val receivedMbps: Double? = null,
+    val reserveSeconds: Long = 0,
+    /** Variation de la réserve sur les 5 dernières secondes (négatif : elle se vide). */
+    val reserveTrend: Long = 0,
+    val loading: Boolean = true,
+    val video: String? = null,
+    val videoMbps: Double? = null,
+    val stalls: Int = 0,
+)
+
+private fun describeVideo(f: Format): String {
+    val codec = when (f.sampleMimeType) {
+        MimeTypes.VIDEO_H265 -> "HEVC (H.265)"
+        MimeTypes.VIDEO_H264 -> "H.264"
+        MimeTypes.VIDEO_AV1 -> "AV1"
+        MimeTypes.VIDEO_VP9 -> "VP9"
+        MimeTypes.VIDEO_MPEG2 -> "MPEG-2"
+        else -> f.sampleMimeType?.substringAfter('/')?.uppercase() ?: "?"
+    }
+    val size = if (f.width > 0 && f.height > 0) "${f.width}×${f.height}" else null
+    val fps = f.frameRate.takeIf { it > 0 }?.let { "${Math.round(it)} i/s" }
+    return listOfNotNull(size, codec, fps).joinToString(" · ")
+}
+
+private fun mbps(v: Double) = String.format(Locale.FRANCE, "%.1f Mb/s", v)
+
+@Composable
+private fun PlaybackInfoPanel(info: PlaybackInfo, playing: Boolean, modifier: Modifier) {
+    val (verdict, color) = when {
+        !info.loading -> "Réserve pleine : la connexion suit sans problème." to Color(0xFF30D158)
+        playing && info.reserveTrend < 0 && info.reserveSeconds < 60 ->
+            "La réserve se vide : le serveur (ou le Wi-Fi) n'envoie pas assez vite." to Color(0xFFFF453A)
+        playing && info.reserveTrend < 0 -> "La réserve baisse, mais reste confortable." to Color(0xFFFFD60A)
+        else -> "La réserve se remplit : la connexion suit." to Color(0xFF30D158)
+    }
+    Column(
+        modifier
+            .width(330.dp)
+            .background(Glass, RoundedCornerShape(16.dp))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text("Infos de lecture", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        InfoLine(
+            "Débit reçu",
+            when {
+                !info.loading -> "en pause (réserve pleine)"
+                info.receivedMbps == null -> "mesure…"
+                else -> mbps(info.receivedMbps)
+            },
+        )
+        InfoLine("Débit de la vidéo", info.videoMbps?.let(::mbps) ?: "non indiqué par le fichier")
+        InfoLine("Réserve", "${info.reserveSeconds} s" + if (info.reserveTrend != 0L) "  (${if (info.reserveTrend > 0) "+" else ""}${info.reserveTrend} s)" else "")
+        InfoLine("Vidéo", info.video ?: "—")
+        InfoLine("Coupures", "${info.stalls}")
+        Spacer(Modifier.height(4.dp))
+        Text(verdict, color = color, fontSize = 12.sp, lineHeight = 16.sp)
+    }
+}
+
+@Composable
+private fun InfoLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(label, color = TextSecondary, fontSize = 12.sp, modifier = Modifier.width(120.dp))
+        Text(value, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

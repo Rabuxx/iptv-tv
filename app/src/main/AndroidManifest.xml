@@ -13,6 +13,7 @@
 
     <application
         android:name=".RabuxApp"
+        android:largeHeap="true"
         android:allowBackup="false"
         android:banner="@drawable/banner_rabux"
         android:icon="@drawable/ic_rabux"
