@@ -168,6 +168,8 @@ fun MediaCard(
     favorite: Boolean = false,
     /** Pastille « Vu » (épisode regardé en entier). */
     watched: Boolean = false,
+    /** Pastille d'information en haut à gauche (« +2 épisodes »). */
+    badge: String? = null,
     /** Prévenu quand la carte prend ou perd le focus (aperçu vidéo des chaînes). */
     onFocusChange: ((Boolean) -> Unit)? = null,
     /** Contenu affiché par-dessus l'image (vidéo d'aperçu). */
@@ -228,7 +230,17 @@ fun MediaCard(
                     Text("★", color = Color(0xFFFFD60A), fontSize = 11.sp)
                 }
             }
-            if (watched) {
+            if (badge != null) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(Color(0xF20A84FF), RoundedCornerShape(50))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) {
+                    Text(badge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                }
+            } else if (watched) {
                 Row(
                     Modifier
                         .align(Alignment.TopStart)

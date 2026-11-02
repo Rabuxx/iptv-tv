@@ -43,6 +43,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,7 +77,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
+import fr.rabuxx.iptvtv.data.SubtitleBackground
+import fr.rabuxx.iptvtv.data.SubtitleMode
+import fr.rabuxx.iptvtv.data.SubtitleSettings
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import fr.rabuxx.iptvtv.data.Channel
@@ -86,10 +92,14 @@ import java.util.Locale
 
 // ============================== Commun ==============================
 
+/** Réglages des sous-titres, fournis par MainActivity à tous les lecteurs. */
+val LocalSubtitles = staticCompositionLocalOf { SubtitleSettings() }
+
 @OptIn(UnstableApi::class)
 @Composable
 internal fun rememberIptvPlayer(): ExoPlayer {
     val context = LocalContext.current
+    val subtitles = LocalSubtitles.current
     return remember {
         val http = DefaultHttpDataSource.Factory()
             .setUserAgent(USER_AGENT)
@@ -103,16 +113,25 @@ internal fun rememberIptvPlayer(): ExoPlayer {
             .build()
             .apply {
                 playWhenReady = true
-                // Piste audio française par défaut quand elle existe
-                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                // Piste audio française par défaut quand elle existe, sous-titres selon les réglages
+                val params = trackSelectionParameters.buildUpon()
                     .setPreferredAudioLanguages("fr", "fre", "fra")
-                    .build()
+                when (subtitles.mode) {
+                    // Pistes « forcées » ou marquées par défaut dans le fichier (passages en langue étrangère)
+                    SubtitleMode.Auto -> params.setPreferredTextLanguages()
+                    SubtitleMode.French -> params.setPreferredTextLanguages("fr", "fre", "fra")
+                    SubtitleMode.English -> params.setPreferredTextLanguages("en", "eng")
+                    SubtitleMode.Off -> params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                }
+                trackSelectionParameters = params.build()
             }
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 private fun VideoSurface(player: ExoPlayer) {
+    val subtitles = LocalSubtitles.current
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
@@ -123,8 +142,28 @@ private fun VideoSurface(player: ExoPlayer) {
                 this.player = player
             }
         },
+        update = { view -> view.subtitleView?.let { applySubtitleStyle(it, subtitles) } },
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+/** Taille, couleur et fond choisis dans les réglages, à la place du style intégré au fichier. */
+@OptIn(UnstableApi::class)
+private fun applySubtitleStyle(view: SubtitleView, s: SubtitleSettings) {
+    val noBackground = s.background == SubtitleBackground.None
+    view.setApplyEmbeddedStyles(false)
+    view.setApplyEmbeddedFontSizes(false)
+    view.setStyle(
+        CaptionStyleCompat(
+            s.color.argb.toInt(),
+            s.background.argb.toInt(),
+            android.graphics.Color.TRANSPARENT,
+            if (noBackground) CaptionStyleCompat.EDGE_TYPE_OUTLINE else CaptionStyleCompat.EDGE_TYPE_NONE,
+            android.graphics.Color.BLACK,
+            null,
+        ),
+    )
+    view.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * s.size.scale)
 }
 
 /** Boîte plein écran qui capte les touches de la télécommande. */

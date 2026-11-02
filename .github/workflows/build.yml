@@ -6,6 +6,8 @@ name: Build APK
 #                                   (the app checks this Release to update itself)
 # If the tests fail, no APK and no Release are produced.
 # Tags with a dash (v0.7.0-beta.1) are published as pre-releases: only the "beta" channel of the app sees them.
+# Automatic publishing: a push on main whose iptv.version (gradle.properties) has no tag yet
+# builds that version, creates the tag v<version> and publishes the Release - no manual "git tag" needed.
 on:
   push:
     branches: [main]
@@ -42,7 +44,21 @@ jobs:
 
       - name: Version from tag
         if: startsWith(github.ref, 'refs/tags/v')
-        run: echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: New version on main?
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          V=$(grep -E '^iptv.version=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          if [ -n "$V" ] && ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+            echo "New version $V: it will be published"
+            echo "VERSION_NAME=$V" >> "$GITHUB_ENV"
+            echo "RELEASE_TAG=v$V" >> "$GITHUB_ENV"
+          else
+            echo "Version $V already published: build only"
+          fi
 
       - name: Signing key
         if: env.KEYSTORE_BASE64 != ''
@@ -96,21 +112,25 @@ jobs:
           path: ${{ env.APK_FILE }}
 
       - name: Release notes
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         run: |
           # Commit messages since the previous tag: shown in the app ("What's new")
-          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-          if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_REF_NAME"; else RANGE="$GITHUB_REF_NAME"; fi
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_SHA}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_SHA"; else RANGE="$GITHUB_SHA"; fi
           git log --no-merges --pretty='- %s' "$RANGE" | grep -v -i -E '^- (bump|merge)' > notes.md || true
           [ -s notes.md ] || echo "- Améliorations et corrections" > notes.md
           cat notes.md
 
       - name: Publish the Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v3
         with:
+          # On main, the tag does not exist yet: it is created on this commit
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ env.RELEASE_TAG }}
           body_path: notes.md
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
           files: |
             ${{ env.APK_FILE }}
             rabux-tv.apk

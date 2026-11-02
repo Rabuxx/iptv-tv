@@ -44,6 +44,12 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="rabuxtv" android:host="live" />
             </intent-filter>
+            <!-- Notification « nouvel épisode » : rabuxtv://series/<id de série> -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="rabuxtv" android:host="series" />
+            </intent-filter>
         </activity>
 
         <receiver

@@ -105,6 +105,54 @@ class CredentialsStore(context: Context) {
         get() = prefs.getInt("screensaver_minutes", 10)
         set(value) = prefs.edit().putInt("screensaver_minutes", value).apply()
 
+    // ---------- Sous-titres ----------
+
+    var subtitles: SubtitleSettings
+        get() = SubtitleSettings(
+            mode = enumOrDefault(prefs.getString("sub_mode", null), SubtitleMode.Auto),
+            size = enumOrDefault(prefs.getString("sub_size", null), SubtitleSize.Medium),
+            background = enumOrDefault(prefs.getString("sub_background", null), SubtitleBackground.Translucent),
+            color = enumOrDefault(prefs.getString("sub_color", null), SubtitleColor.White),
+        )
+        set(value) = prefs.edit()
+            .putString("sub_mode", value.mode.name)
+            .putString("sub_size", value.size.name)
+            .putString("sub_background", value.background.name)
+            .putString("sub_color", value.color.name)
+            .apply()
+
+    // ---------- Nouveaux épisodes ----------
+
+    /** Nombre d'épisodes par série lors de la dernière visite de sa fiche. */
+    var knownEpisodes: Map<String, Int>
+        get() = readCounts("known_episodes")
+        set(value) = writeCounts("known_episodes", value)
+
+    /** Séries avec des épisodes ajoutés depuis la dernière visite. */
+    var newEpisodes: Map<String, Int>
+        get() = readCounts("new_episodes")
+        set(value) = writeCounts("new_episodes", value)
+
+    /** Autorisation des notifications déjà demandée pour les nouveaux épisodes (Android 13+). */
+    var episodeNotificationAsked: Boolean
+        get() = prefs.getBoolean("episode_notification_asked", false)
+        set(value) = prefs.edit().putBoolean("episode_notification_asked", value).apply()
+
+    var lastEpisodeCheck: Long
+        get() = prefs.getLong("last_episode_check", 0L)
+        set(value) = prefs.edit().putLong("last_episode_check", value).apply()
+
+    private fun readCounts(key: String): Map<String, Int> = runCatching {
+        val json = org.json.JSONObject(prefs.getString(key, null) ?: return emptyMap())
+        json.keys().asSequence().associateWith { json.getInt(it) }
+    }.getOrDefault(emptyMap())
+
+    private fun writeCounts(key: String, value: Map<String, Int>) {
+        val json = org.json.JSONObject()
+        value.forEach { (k, v) -> json.put(k, v) }
+        prefs.edit().putString(key, json.toString()).apply()
+    }
+
     /** Tri et note minimale choisis pour les films ou les séries. */
     fun listFilter(section: Section) = ListFilter(
         sort = prefs.getString("sort_${section.name}", null)

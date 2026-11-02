@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -47,6 +48,7 @@ import fr.rabuxx.iptvtv.ui.AppTheme
 import fr.rabuxx.iptvtv.ui.ChannelSource
 import fr.rabuxx.iptvtv.ui.Glass
 import fr.rabuxx.iptvtv.ui.LivePlayerScreen
+import fr.rabuxx.iptvtv.ui.LocalSubtitles
 import fr.rabuxx.iptvtv.ui.LoginScreen
 import fr.rabuxx.iptvtv.ui.MainScreen
 import fr.rabuxx.iptvtv.ui.MovieDetailScreen
@@ -114,8 +116,10 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                 ) {
-                    holder.SaveableStateProvider(route.key) {
-                        Screen(route, state)
+                    CompositionLocalProvider(LocalSubtitles provides state.subtitles) {
+                        holder.SaveableStateProvider(route.key) {
+                            Screen(route, state)
+                        }
                     }
 
                     state.sleepWarning?.let { seconds ->

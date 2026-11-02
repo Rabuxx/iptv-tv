@@ -99,9 +99,11 @@ En local, les mêmes noms peuvent être mis dans `local.properties` (non version
 
 ## Publier une bêta
 
+Mets une version avec un tiret dans `gradle.properties` (`iptv.version=0.9.0-beta.1`) et push sur `main`, ou crée le tag à la main :
+
 ```powershell
-git tag v0.7.1-beta.1
-git push origin v0.7.1-beta.1
+git tag v0.9.0-beta.1
+git push origin v0.9.0-beta.1
 ```
 
 Un tag avec un tiret est publié en **pré-version** : seules les TV réglées sur le canal bêta la proposent, et le lien `latest/download/rabux-tv.apk` continue de pointer vers la dernière version stable.
@@ -178,12 +180,14 @@ Les APK compilés dans Android Studio et ceux de la CI auront ainsi la même sig
 
 ### 5. Publier une version
 
-```powershell
-git tag v0.4.0
-git push origin v0.4.0
-```
+Change le numéro dans `gradle.properties` (`iptv.version=0.8.1`), commit et push sur `main` : la CI voit que cette version n'a pas encore de tag, compile l'APK, crée le tag `v0.8.1` et publie la *Release*. L'app propose alors la mise à jour dans **Réglages** (un point apparaît sur l'onglet).
 
-Le workflow compile l'APK et le publie dans *Releases*. Pour les versions suivantes : modifie le code, commit, push, puis tag `v0.3.1`, `v0.4.0`… L'app propose alors la mise à jour dans **Réglages** (un point apparaît sur l'onglet).
+Un push sans changement de version compile seulement (pas de Release). On peut toujours publier à la main avec un tag :
+
+```powershell
+git tag v0.8.1
+git push origin v0.8.1
+```
 
 Au premier essai, Android TV demande d'autoriser « Rabux TV » à installer des applications : accepte, reviens dans l'app et relance l'installation.
 

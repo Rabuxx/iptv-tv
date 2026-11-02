@@ -1,5 +1,14 @@
 package fr.rabuxx.iptvtv.ui
 
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import fr.rabuxx.iptvtv.data.SubtitleBackground
+import fr.rabuxx.iptvtv.data.SubtitleSettings
+import fr.rabuxx.iptvtv.data.next
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -580,6 +589,18 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
                 if (state.libraryLoading) "Actualisation du catalogue…" else "↻ Actualiser tout le catalogue",
                 onClick = { if (!state.libraryLoading) vm.reloadAll() },
             )
+
+            SectionTitle("Sous-titres", Modifier.padding(top = 10.dp))
+            val sub = state.subtitles
+            SettingButton("Par défaut : ${sub.mode.label}", onClick = { vm.updateSubtitles { it.copy(mode = it.mode.next()) } })
+            SettingHint(
+                "« Automatiques » : seulement les passages en langue étrangère quand le fichier les prévoit. " +
+                    "Tu peux toujours changer de piste pendant la lecture (bouton Pistes).",
+            )
+            SettingButton("Taille : ${sub.size.label}", onClick = { vm.updateSubtitles { it.copy(size = it.size.next()) } })
+            SettingButton("Fond : ${sub.background.label}", onClick = { vm.updateSubtitles { it.copy(background = it.background.next()) } })
+            SettingButton("Couleur du texte : ${sub.color.label}", onClick = { vm.updateSubtitles { it.copy(color = it.color.next()) } })
+            SubtitlePreview(sub)
         }
 
         // --- Fiches enrichies et contrôle parental ---
@@ -619,6 +640,37 @@ private fun SettingsContent(state: UiState, vm: MainViewModel) {
                 SettingButton("Tout réafficher", onClick = vm::resetCategories)
             }
         }
+    }
+}
+
+/** Aperçu du style des sous-titres sur un fond d'image. */
+@Composable
+private fun SubtitlePreview(s: SubtitleSettings) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(84.dp)
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF3A5A78), Color(0xFF8A6B4F), Color(0xFFD9C7A3))),
+                RoundedCornerShape(10.dp),
+            ),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
+        val outline = s.background == SubtitleBackground.None
+        Text(
+            "Exemple de sous-titre à l'écran",
+            modifier = Modifier
+                .padding(bottom = 10.dp)
+                .background(Color(s.background.argb), RoundedCornerShape(2.dp))
+                .padding(horizontal = 6.dp, vertical = 1.dp),
+            color = Color(s.color.argb),
+            fontSize = (13 * s.size.scale).sp,
+            style = if (outline) {
+                androidx.compose.ui.text.TextStyle(shadow = Shadow(Color.Black, blurRadius = 4f))
+            } else {
+                androidx.compose.ui.text.TextStyle.Default
+            },
+        )
     }
 }
 

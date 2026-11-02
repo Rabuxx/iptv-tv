@@ -21,6 +21,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import fr.rabuxx.iptvtv.MainViewModel
 import fr.rabuxx.iptvtv.UiState
+import fr.rabuxx.iptvtv.data.NewEpisodes
 import fr.rabuxx.iptvtv.data.Channel
 import fr.rabuxx.iptvtv.data.Movie
 import fr.rabuxx.iptvtv.data.Series
@@ -54,6 +55,7 @@ fun HomeContent(state: UiState, vm: MainViewModel, restore: Boolean, onRestored:
     val focus = rememberShelfFocus(restore, onRestored)
     val fav = state.favorites
 
+    val newEpisodes = state.seriesWithNewEpisodes
     val nothingYet = state.history.isEmpty() && fav.channels.isEmpty() && fav.movies.isEmpty() &&
         fav.series.isEmpty() && state.recentChannels.isEmpty() && state.recentMovies.isEmpty() &&
         state.recentSeries.isEmpty()
@@ -75,6 +77,27 @@ fun HomeContent(state: UiState, vm: MainViewModel, restore: Boolean, onRestored:
         contentPadding = PaddingValues(top = 4.dp, bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        // Séries suivies avec des épisodes ajoutés depuis la dernière visite
+        if (newEpisodes.isNotEmpty()) item("new-episodes") {
+            Shelf("Nouveaux épisodes") {
+                itemsIndexed(newEpisodes, key = { _, p -> "ne-${p.first.seriesId}" }) { _, (series, count) ->
+                    val key = "ne:${series.seriesId}"
+                    MediaCard(
+                        title = series.name,
+                        image = series.cover,
+                        subtitle = NewEpisodes.label(count),
+                        badge = "+$count",
+                        modifier = Modifier.width(PosterWidth),
+                        focusRequester = focus.requesterFor(key),
+                        onClick = {
+                            focus.mark(key)
+                            vm.openSeries(series)
+                        },
+                    )
+                }
+            }
+        }
+
         if (state.history.isNotEmpty()) item("history") {
             Shelf("À suivre") {
                 itemsIndexed(state.history, key = { _, h -> h.id }) { _, h ->
@@ -84,6 +107,7 @@ fun HomeContent(state: UiState, vm: MainViewModel, restore: Boolean, onRestored:
                         image = h.movie?.poster ?: h.series?.cover,
                         subtitle = h.label,
                         progress = vm.progress(h.progressKey),
+                        badge = h.series?.let { s -> state.newEpisodes[s.seriesId] }?.let { n -> "+$n" },
                         modifier = Modifier.width(PosterWidth),
                         focusRequester = focus.requesterFor(key),
                         // Appui long : retirer de « À suivre »
@@ -193,6 +217,7 @@ fun SeriesShelf(title: String, prefix: String, series: List<Series>, state: UiSt
                 modifier = Modifier.width(PosterWidth),
                 focusRequester = focus.requesterFor(key),
                 favorite = state.favorites.has(item),
+                badge = state.newEpisodes[item.seriesId]?.let { n -> "+$n" },
                 onLongClick = { vm.toggleFavorite(item) },
                 onClick = {
                     focus.mark(key)

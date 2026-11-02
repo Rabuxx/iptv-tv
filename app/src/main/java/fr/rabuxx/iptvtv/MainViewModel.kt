@@ -1,8 +1,16 @@
 package fr.rabuxx.iptvtv
 
+import android.Manifest
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import fr.rabuxx.iptvtv.data.AccountInfo
@@ -37,7 +45,9 @@ import fr.rabuxx.iptvtv.data.WatchItem
 import fr.rabuxx.iptvtv.data.WatchStatsStore
 import fr.rabuxx.iptvtv.data.WatchType
 import fr.rabuxx.iptvtv.data.SPORT_CATEGORY
+import fr.rabuxx.iptvtv.data.NewEpisodes
 import fr.rabuxx.iptvtv.data.SportChannels
+import fr.rabuxx.iptvtv.data.SubtitleSettings
 import fr.rabuxx.iptvtv.data.SportProgram
 import fr.rabuxx.iptvtv.data.SportTonight
 import fr.rabuxx.iptvtv.data.Versions
@@ -253,6 +263,9 @@ data class UiState(
     val crashReportsAvailable: Boolean = false,
     // Économiseur d'écran
     val screensaverMinutes: Int = 10,
+    val subtitles: SubtitleSettings = SubtitleSettings(),
+    /** Série → nombre d'épisodes ajoutés depuis la dernière visite de sa fiche. */
+    val newEpisodes: Map<String, Int> = emptyMap(),
     val screensaverActive: Boolean = false,
     val screensaverImages: List<String> = emptyList(),
     /** true : images de fond 16:9 (diaporama) ; false : affiches (mur d'affiches). */
@@ -270,6 +283,14 @@ data class UiState(
         return key in lockedCategories && key !in unlockedCategories
     }
     val hasReplay: Boolean get() = library?.live?.any { it.archiveDays > 0 } == true
+
+    /** Séries suivies : celles de « À suivre » et les favorites. */
+    val followedSeries: List<Series>
+        get() = (history.mapNotNull { it.series } + favorites.series).distinctBy { it.seriesId }
+
+    /** Séries suivies avec des nouveaux épisodes, et leur nombre. */
+    val seriesWithNewEpisodes: List<Pair<Series, Int>>
+        get() = followedSeries.mapNotNull { s -> newEpisodes[s.seriesId]?.takeIf { it > 0 }?.let { s to it } }
 
     /** Le multi-écran ouvre un flux par case : inutile si l'abonnement n'autorise qu'une connexion. */
     val multiViewAvailable: Boolean get() = (account?.maxStreams ?: 2) >= 2
@@ -311,6 +332,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Lien rabuxtv://history/<id> reçu depuis l'accueil Android TV, ouvert dès la connexion faite. */
     private var pendingHistoryId: String? = null
+    private var pendingSeriesId: String? = null
+    private var episodeCheckJob: Job? = null
 
     /** Vrai si l'app s'est reconnectée seule au lancement (utilisateur existant). */
     private val autoLogin = store.load() != null
@@ -344,6 +367,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             crashReports = store.crashReports,
             crashReportsAvailable = BuildConfig.SENTRY_DSN.isNotBlank(),
             screensaverMinutes = store.screensaverMinutes,
+            subtitles = store.subtitles,
+            newEpisodes = store.newEpisodes,
         ),
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -413,6 +438,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 delay(TICK_MS)
                 checkReminders()
                 checkScreensaver()
+                maybeCheckNewEpisodes()
                 statsStore.flush()
             }
         }
@@ -650,7 +676,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(seriesInfo = Detail(loading = true), seriesInfoFor = series.seriesId) }
         detailJob = viewModelScope.launch {
             val info = try {
-                c.seriesInfo(series).also { info -> _state.update { it.copy(seriesInfo = Detail(data = info)) } }
+                c.seriesInfo(series).also { info ->
+                    _state.update { it.copy(seriesInfo = Detail(data = info)) }
+                    acknowledgeEpisodes(series.seriesId, info.episodes.values.sumOf { it.size })
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1169,6 +1198,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (uri.host) {
             "history" -> pendingHistoryId = uri.lastPathSegment ?: return
             "live" -> pendingLiveId = uri.lastPathSegment ?: return
+            "series" -> pendingSeriesId = uri.lastPathSegment ?: return
             else -> return
         }
         openPendingDeepLink()
@@ -1182,6 +1212,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             pendingLiveId = null
             _state.update { it.copy(stack = listOf(Route.Main), dialog = null) }
             playChannels(listOf(channel), 0)
+            return
+        }
+        pendingSeriesId?.let { id ->
+            // Notification « nouvel épisode » : on ouvre la fiche de la série
+            val series = _state.value.followedSeries.firstOrNull { it.seriesId == id }
+                ?: fullLibrary?.series?.firstOrNull { it.seriesId == id }
+                ?: return
+            pendingSeriesId = null
+            _state.update { it.copy(stack = listOf(Route.Main), dialog = null) }
+            openSeries(series)
             return
         }
         val id = pendingHistoryId ?: return
@@ -1423,6 +1463,88 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- Sous-titres ----------
+
+    fun updateSubtitles(change: (SubtitleSettings) -> SubtitleSettings) {
+        val updated = change(_state.value.subtitles)
+        store.subtitles = updated
+        _state.update { it.copy(subtitles = updated) }
+    }
+
+    // ---------- Nouveaux épisodes ----------
+
+    /** Vérifie les séries suivies au plus toutes les [EPISODE_CHECK_MS], une fois le catalogue chargé. */
+    private fun maybeCheckNewEpisodes() {
+        val c = client ?: return
+        if (_state.value.library == null || episodeCheckJob?.isActive == true) return
+        if (System.currentTimeMillis() - store.lastEpisodeCheck < EPISODE_CHECK_MS) return
+        val followed = _state.value.followedSeries.take(EPISODE_CHECK_MAX)
+        if (followed.isEmpty()) return
+        store.lastEpisodeCheck = System.currentTimeMillis()
+        // Android 13+ : on demande une fois l'autorisation d'afficher les notifications
+        if (Build.VERSION.SDK_INT >= 33 && !store.episodeNotificationAsked) {
+            store.episodeNotificationAsked = true
+            _state.update { it.copy(askNotificationPermission = true) }
+        }
+        episodeCheckJob = viewModelScope.launch {
+            val counts = followed.map { s ->
+                async {
+                    runCatching {
+                        epgSemaphore.withPermit { s.seriesId to c.seriesInfo(s).episodes.values.sumOf { it.size } }
+                    }.getOrNull()
+                }
+            }.awaitAll().filterNotNull().filter { it.second > 0 }.toMap()
+            val result = NewEpisodes.update(store.knownEpisodes, store.newEpisodes, counts)
+            store.knownEpisodes = result.known
+            store.newEpisodes = result.fresh
+            _state.update { it.copy(newEpisodes = result.fresh) }
+            followed.filter { it.seriesId in result.toNotify }.forEach { s ->
+                notifyNewEpisodes(s, result.fresh[s.seriesId] ?: 1)
+            }
+        }
+    }
+
+    private fun acknowledgeEpisodes(seriesId: String, count: Int) {
+        if (count <= 0) return
+        val (known, fresh) = NewEpisodes.acknowledge(store.knownEpisodes, store.newEpisodes, seriesId, count)
+        store.knownEpisodes = known
+        store.newEpisodes = fresh
+        _state.update { it.copy(newEpisodes = fresh) }
+    }
+
+    private fun notifyNewEpisodes(series: Series, count: Int) {
+        val app = getApplication<Application>()
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            app.getSystemService(NotificationManager::class.java)?.createNotificationChannel(
+                NotificationChannel(EPISODES_CHANNEL, "Nouveaux épisodes", NotificationManager.IMPORTANCE_DEFAULT),
+            )
+        }
+        val open = Intent(Intent.ACTION_VIEW, Uri.parse("rabuxtv://series/${Uri.encode(series.seriesId)}"))
+            .setPackage(app.packageName)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val content = PendingIntent.getActivity(
+            app,
+            series.seriesId.hashCode(),
+            open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(app, EPISODES_CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher)
+            .setContentTitle(series.name)
+            .setContentText(NewEpisodes.label(count) + " disponible" + if (count > 1) "s" else "")
+            .setContentIntent(content)
+            .setAutoCancel(true)
+            .build()
+        runCatching {
+            app.getSystemService(NotificationManager::class.java)?.notify("ep:${series.seriesId}".hashCode(), notification)
+        }
+    }
+
     fun cycleScreensaver() {
         val steps = SCREENSAVER_STEPS
         val next = steps[(steps.indexOf(_state.value.screensaverMinutes) + 1).mod(steps.size)]
@@ -1595,6 +1717,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val TICK_MS = 15_000L
+        const val EPISODE_CHECK_MS = 3 * 3600_000L
+        const val EPISODE_CHECK_MAX = 30
+        const val EPISODES_CHANNEL = "new_episodes"
         const val MAX_RECOMMENDATIONS = 20
         const val RECS_DEBOUNCE_MS = 3_000L
         const val TIMESHIFT_EXTRA_MIN = 180L
