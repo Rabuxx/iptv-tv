@@ -211,6 +211,8 @@ class MainActivity : ComponentActivity() {
                 isFavorite = state.favorites.has(route.series),
                 onToggleFavorite = { vm.toggleFavorite(route.series) },
                 progressOf = { vm.progress(vm.episodeKey(it)) },
+                watchedOf = vm::isWatched,
+                onToggleWatched = { vm.setWatched(it, !vm.isWatched(it)) },
                 onPlay = { vm.playEpisode(route.series, it) },
                 tmdb = state.tmdb.data?.takeIf { state.tmdbFor == vm.seriesKey(route.series) },
                 onTrailer = ::openTrailer,

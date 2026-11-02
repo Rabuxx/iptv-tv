@@ -747,7 +747,11 @@ private fun hhmm(ts: Long) = java.text.SimpleDateFormat("HH:mm", Locale.FRANCE).
 // ============================== Films / épisodes / replay ==============================
 
 private const val VOD_MAX_RETRIES = 3
-private const val UP_NEXT_BEFORE_END_MS = 20_000L
+/** Le compte à rebours de l'épisode suivant démarre pendant le générique de fin. */
+private const val UP_NEXT_BEFORE_END_MS = 30_000L
+
+/** Une coupure du flux dans la dernière minute compte comme la fin de l'épisode. */
+private const val END_TOLERANCE_MS = 60_000L
 private const val UP_NEXT_COUNTDOWN_S = 10
 
 /**
@@ -801,6 +805,12 @@ fun VodPlayerScreen(
             }
 
             override fun onPlayerError(e: PlaybackException) {
+                val dur = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: 0L
+                // Beaucoup de serveurs IPTV coupent le flux juste avant la fin : on considère l'épisode terminé
+                if (dur > 0 && dur - player.currentPosition <= END_TOLERANCE_MS) {
+                    ended = true
+                    return
+                }
                 // Coupure réseau : on relance depuis la position courante
                 if (retries < VOD_MAX_RETRIES) {
                     retries++
@@ -879,17 +889,21 @@ fun VodPlayerScreen(
         }
     }
 
-    LaunchedEffect(ended) {
-        if (!ended) return@LaunchedEffect
-        if (onNext == null || upNextDismissed) {
-            onFinished()
-            return@LaunchedEffect
-        }
-        for (s in UP_NEXT_COUNTDOWN_S downTo 1) {
-            countdown = s
+    // Enchaînement automatique : le compte à rebours part dès que la proposition s'affiche (générique de fin)
+    // et se met en pause si on met la vidéo en pause. Retour annule.
+    LaunchedEffect(upNextVisible) {
+        if (!upNextVisible) return@LaunchedEffect
+        countdown = UP_NEXT_COUNTDOWN_S
+        while (countdown > 0) {
             delay(1_000)
+            if (playing || ended) countdown--
         }
-        onNext()
+        onNext?.invoke()
+    }
+
+    // Fin sans épisode suivant (ou proposition refusée) : retour à la fiche
+    LaunchedEffect(ended, upNextDismissed) {
+        if (ended && (onNext == null || nextLabel == null || upNextDismissed)) onFinished()
     }
 
     // Retour : ferme d'abord le panneau des pistes, puis la proposition d'épisode suivant
@@ -1020,10 +1034,11 @@ fun VodPlayerScreen(
                     Text("Épisode suivant", color = TextSecondary, fontSize = 12.sp)
                     Text(nextLabel!!, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     ActionButton(
-                        label = if (ended) "▶  Lecture dans $countdown s" else "▶  Lire maintenant",
+                        label = "▶  Lecture dans $countdown s",
                         onClick = { onNext?.invoke() },
                         modifier = Modifier.focusRequester(upNextFocus),
                     )
+                    Text("OK pour lancer maintenant · Retour pour rester", color = TextSecondary, fontSize = 11.sp)
                 }
             }
         }

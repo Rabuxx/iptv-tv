@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -165,6 +166,8 @@ fun MediaCard(
     /** Appui long sur OK (ajout/retrait des favoris). */
     onLongClick: (() -> Unit)? = null,
     favorite: Boolean = false,
+    /** Pastille « Vu » (épisode regardé en entier). */
+    watched: Boolean = false,
     /** Prévenu quand la carte prend ou perd le focus (aperçu vidéo des chaînes). */
     onFocusChange: ((Boolean) -> Unit)? = null,
     /** Contenu affiché par-dessus l'image (vidéo d'aperçu). */
@@ -225,7 +228,19 @@ fun MediaCard(
                     Text("★", color = Color(0xFFFFD60A), fontSize = 11.sp)
                 }
             }
-            if (progress > 0f) {
+            if (watched) {
+                Row(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .background(Color(0xE630D158), RoundedCornerShape(50))
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("✓ Vu", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            if (progress > 0f && !watched) {
                 Box(
                     Modifier
                         .align(Alignment.BottomCenter)

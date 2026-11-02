@@ -216,6 +216,8 @@ fun SeriesDetailScreen(
     isFavorite: Boolean,
     onToggleFavorite: () -> Unit,
     progressOf: (Episode) -> Float,
+    watchedOf: (Episode) -> Boolean,
+    onToggleWatched: (Episode) -> Unit,
     onPlay: (Episode) -> Unit,
     tmdb: TmdbView?,
     onTrailer: (String) -> Unit,
@@ -227,18 +229,32 @@ fun SeriesDetailScreen(
 
     // Saison choisie et dernier épisode lancé : conservés quand on revient du lecteur
     var season by rememberSaveable { mutableIntStateOf(-1) }
-    // Depuis « À suivre », on arrive directement sur l'épisode en cours
-    var lastEpisodeId by rememberSaveable { mutableStateOf(preferredEpisodeId) }
+    // Dernier épisode lancé depuis cette fiche
+    var lastEpisodeId by rememberSaveable { mutableStateOf<String?>(null) }
+    // Change quand on marque un épisode vu / pas vu (appui long), pour rafraîchir les pastilles
+    var watchedTick by remember { mutableIntStateOf(0) }
+    // À l'ouverture, on arrive sur le prochain épisode à regarder : celui en cours (« À suivre »)
+    // s'il n'est pas fini, sinon le suivant, sinon le premier épisode pas encore vu
+    val startId = remember(info) {
+        val all = info?.episodes?.values?.flatten().orEmpty()
+        val preferred = all.indexOfFirst { it.id == preferredEpisodeId }
+        when {
+            preferred >= 0 && !watchedOf(all[preferred]) -> all[preferred].id
+            preferred >= 0 -> (all.getOrNull(preferred + 1) ?: all[preferred]).id
+            else -> (all.firstOrNull { !watchedOf(it) } ?: all.firstOrNull())?.id
+        }
+    }
+    val anchorId = lastEpisodeId ?: startId
     val currentSeason = if (season in seasons) {
         season
     } else {
-        seasons.firstOrNull { s -> info?.episodes?.get(s)?.any { it.id == lastEpisodeId } == true } ?: seasons.firstOrNull()
+        seasons.firstOrNull { s -> info?.episodes?.get(s)?.any { it.id == anchorId } == true } ?: seasons.firstOrNull()
     }
     val episodes = currentSeason?.let { info?.episodes?.get(it) }.orEmpty()
 
     val episodeFocus = remember { FocusRequester() }
     val listState = rememberLazyListState()
-    val focusIndex = episodes.indexOfFirst { it.id == lastEpisodeId }.takeIf { it >= 0 } ?: 0
+    val focusIndex = episodes.indexOfFirst { it.id == anchorId }.takeIf { it >= 0 } ?: 0
 
     // Le focus va sur le dernier épisode lancé, sinon sur le premier, dès que la liste est chargée
     LaunchedEffect(episodes.isNotEmpty()) {
@@ -313,12 +329,19 @@ fun SeriesDetailScreen(
                         horizontalArrangement = Arrangement.spacedBy(20.dp),
                     ) {
                         itemsIndexed(episodes, key = { _, e -> e.id }) { index, episode ->
+                            val watched = remember(watchedTick, episode.id) { watchedOf(episode) }
                             MediaCard(
                                 title = "${episode.number}. ${episode.title}",
                                 image = episode.image ?: series.backdrop ?: info?.backdrop,
                                 aspectRatio = 16f / 9f,
                                 subtitle = formatDuration(episode.duration),
                                 progress = progressOf(episode),
+                                watched = watched,
+                                // Appui long : marquer vu / pas vu
+                                onLongClick = {
+                                    onToggleWatched(episode)
+                                    watchedTick++
+                                },
                                 focusRequester = if (index == focusIndex) episodeFocus else null,
                                 modifier = Modifier.width(210.dp),
                                 onClick = {

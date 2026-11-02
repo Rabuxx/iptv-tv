@@ -138,13 +138,28 @@ class CredentialsStore(context: Context) {
     }
 
     fun savePosition(key: String, positionMs: Long, durationMs: Long) {
-        val finished = durationMs > 0 && positionMs > durationMs * 0.95
+        // 90 % : le générique de fin ne compte pas
+        val finished = durationMs > 0 && positionMs > durationMs * 0.90
         val tooEarly = positionMs < 30_000
         val edit = positions.edit()
         if (finished || tooEarly) {
             edit.remove("$key:pos").remove("$key:dur")
         } else {
             edit.putLong("$key:pos", positionMs).putLong("$key:dur", durationMs)
+        }
+        if (finished) edit.putBoolean("$key:seen", true)
+        edit.apply()
+    }
+
+    /** Vu en entier au moins une fois (pastille « Vu »). */
+    fun isWatched(key: String): Boolean = positions.getBoolean("$key:seen", false)
+
+    fun setWatched(key: String, watched: Boolean) {
+        val edit = positions.edit()
+        if (watched) {
+            edit.putBoolean("$key:seen", true).remove("$key:pos").remove("$key:dur")
+        } else {
+            edit.remove("$key:seen")
         }
         edit.apply()
     }

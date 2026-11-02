@@ -712,6 +712,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (series == null || next == null) {
             back()
         } else {
+            // L'épisode quitté pendant le générique compte comme vu
+            route.episode?.let { setWatched(it, true) }
             playEpisode(series, next, replace = true)
         }
     }
@@ -745,6 +747,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun resumePosition(key: String) = store.position(key)
 
     fun progress(key: String) = store.progress(key)
+
+    fun isWatched(episode: Episode) = store.isWatched(episodeKey(episode))
+
+    fun setWatched(episode: Episode, watched: Boolean) = store.setWatched(episodeKey(episode), watched)
 
     fun savePosition(route: Route.VodPlayer, positionMs: Long, durationMs: Long) {
         store.savePosition(route.resumeKey, positionMs, durationMs)
