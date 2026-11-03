@@ -78,6 +78,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -900,6 +901,12 @@ fun VodPlayerScreen(
                 // Beaucoup de serveurs IPTV coupent le flux juste avant la fin : on considère l'épisode terminé
                 if (dur > 0 && dur - player.currentPosition <= END_TOLERANCE_MS) {
                     ended = true
+                    return
+                }
+                // Le serveur refuse le fichier (4xx) : réessayer ne changerait rien, on affiche le code tout de suite
+                val http = e.cause as? HttpDataSource.InvalidResponseCodeException
+                if (http != null && http.responseCode in 400..499) {
+                    error = "Lecture refusée par le serveur (HTTP ${http.responseCode}, ${http.dataSpec.uri.host})"
                     return
                 }
                 // Coupure réseau : on relance depuis la position courante
