@@ -25,11 +25,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.LocalContentColor
-import androidx.tv.material3.Surface
 import fr.rabuxx.iptvtv.data.EpgProgram
 import fr.rabuxx.iptvtv.data.nowPlaying
 import fr.rabuxx.iptvtv.data.progress
 import fr.rabuxx.iptvtv.data.upNext
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +56,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -1064,6 +1065,25 @@ fun VodPlayerScreen(
     }) {
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player)
+
+            // Au doigt : tiers gauche et droit pour reculer ou avancer, centre pour la pause, appui long pour les pistes
+            Box(
+                Modifier.fillMaxSize().pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { tapAt ->
+                            val third = size.width / 3f
+                            when {
+                                tapAt.x < third -> { player.seekBack(); position = player.currentPosition }
+                                tapAt.x > third * 2 -> { player.seekForward(); position = player.currentPosition }
+                                player.isPlaying -> player.pause()
+                                else -> player.play()
+                            }
+                            touch()
+                        },
+                        onLongPress = { tracksOpen = true; touch() },
+                    )
+                },
+            )
 
             if (infoOpen) {
                 PlaybackInfoPanel(info, playing, Modifier.align(Alignment.TopEnd).padding(top = 24.dp, end = 32.dp))

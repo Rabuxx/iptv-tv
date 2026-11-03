@@ -12,7 +12,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.Surface
 import fr.rabuxx.iptvtv.TmdbView
 import fr.rabuxx.iptvtv.data.CastMember
 import androidx.compose.foundation.layout.Arrangement
