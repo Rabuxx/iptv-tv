@@ -54,6 +54,14 @@
         </activity>
 
         <receiver
+            android:name=".data.DownloadReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
             android:name=".data.ReminderReceiver"
             android:exported="false" />
 

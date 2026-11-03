@@ -38,6 +38,8 @@ fun LoginScreen(
     error: String?,
     onSubmit: (Credentials) -> Unit,
     onPhoneForm: (Map<String, String>) -> Unit,
+    /** Accès hors ligne : la connexion au serveur n'est pas nécessaire pour lire un fichier téléchargé. */
+    onDownloads: (() -> Unit)? = null,
 ) {
     var server by rememberSaveable { mutableStateOf(initial?.server ?: "") }
     var username by rememberSaveable { mutableStateOf(initial?.username ?: "") }
@@ -126,6 +128,9 @@ fun LoginScreen(
                 onClick = { if (!loading) submit() },
                 modifier = Modifier.fillMaxWidth(),
             )
+            onDownloads?.let {
+                ActionButton(label = "Mes téléchargements", onClick = it, modifier = Modifier.fillMaxWidth())
+            }
         }
 
         PhoneLinkCard(url = phoneUrl, title = "Ou depuis ton téléphone", modifier = Modifier.width(300.dp))

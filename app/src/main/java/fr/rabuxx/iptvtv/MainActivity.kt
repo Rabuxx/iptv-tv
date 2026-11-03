@@ -46,6 +46,7 @@ import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.ui.AppDialogHost
 import fr.rabuxx.iptvtv.ui.AppTheme
 import fr.rabuxx.iptvtv.ui.ChannelSource
+import fr.rabuxx.iptvtv.ui.DownloadsScreen
 import fr.rabuxx.iptvtv.ui.Glass
 import fr.rabuxx.iptvtv.ui.LivePlayerScreen
 import fr.rabuxx.iptvtv.ui.LocalSubtitles
@@ -192,6 +193,7 @@ class MainActivity : ComponentActivity() {
                 error = state.loginError,
                 onSubmit = vm::login,
                 onPhoneForm = { form -> vm.onPhoneForm(fr.rabuxx.iptvtv.data.PhoneLinkMode.Login, form) },
+                onDownloads = if (state.downloads.isNotEmpty()) vm::openDownloads else null,
             )
 
             Route.Main -> MainScreen(state = state, vm = vm)
@@ -206,6 +208,12 @@ class MainActivity : ComponentActivity() {
                 tmdb = state.tmdb.data?.takeIf { state.tmdbFor == vm.movieKey(route.movie) },
                 onTrailer = ::openTrailer,
                 onOpenMovie = { vm.openMovie(it) },
+                downloadLabel = if (state.downloadsEnabled) {
+                    fr.rabuxx.iptvtv.data.downloadLabel(state.downloads.firstOrNull { it.id == vm.movieKey(route.movie) })
+                } else {
+                    null
+                },
+                onDownload = { ext -> vm.downloadMovie(route.movie, ext) },
             )
 
             is Route.SeriesDetail -> SeriesDetailScreen(
@@ -221,12 +229,28 @@ class MainActivity : ComponentActivity() {
                 tmdb = state.tmdb.data?.takeIf { state.tmdbFor == vm.seriesKey(route.series) },
                 onTrailer = ::openTrailer,
                 onOpenSeries = { vm.openSeries(it) },
+                downloadLabelOf = if (state.downloadsEnabled) {
+                    { episode ->
+                        fr.rabuxx.iptvtv.data.downloadLabel(state.downloads.firstOrNull { it.id == vm.episodeKey(episode) })
+                    }
+                } else {
+                    null
+                },
+                onDownload = { vm.downloadEpisode(route.series, it) },
             )
 
             is Route.Replay -> ReplayScreen(
                 channel = route.channel,
                 detail = state.replay,
                 onPlay = { vm.playReplay(route.channel, it) },
+            )
+
+            Route.Downloads -> DownloadsScreen(
+                items = state.downloads,
+                freeBytes = state.freeBytes,
+                onPlay = vm::playDownload,
+                onRetry = vm::retryDownload,
+                onRemove = vm::removeDownload,
             )
 
             Route.Sport -> SportScreen(

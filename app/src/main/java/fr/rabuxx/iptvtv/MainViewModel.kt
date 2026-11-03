@@ -23,6 +23,9 @@ import fr.rabuxx.iptvtv.data.EpgProgram
 import fr.rabuxx.iptvtv.data.Episode
 import fr.rabuxx.iptvtv.data.FAVORITES_CATEGORY
 import fr.rabuxx.iptvtv.data.Favorites
+import fr.rabuxx.iptvtv.data.DownloadItem
+import fr.rabuxx.iptvtv.data.DownloadState
+import fr.rabuxx.iptvtv.data.Downloads
 import fr.rabuxx.iptvtv.data.HistoryItem
 import fr.rabuxx.iptvtv.data.LATEST_CATEGORY
 import fr.rabuxx.iptvtv.data.Library
@@ -90,6 +93,7 @@ sealed interface Route {
     data class Replay(val channel: Channel) : Route
     data object Sport : Route
     data object Stats : Route
+    data object Downloads : Route
 
     /** Multi-écran : 2 à 4 chaînes en même temps. */
     data class MultiView(val initial: List<Channel>) : Route
@@ -124,6 +128,7 @@ val Route.key: String
         is Route.Replay -> "replay:${channel.streamId}"
         Route.Sport -> "sport"
         Route.Stats -> "stats"
+        Route.Downloads -> "downloads"
         is Route.MultiView -> "multi"
         is Route.LivePlayer -> "live-player"
         is Route.VodPlayer -> "vod-player:$resumeKey"
@@ -212,6 +217,10 @@ data class UiState(
     val live: Catalog<Channel> = Catalog(),
     val movies: Catalog<Movie> = Catalog(),
     val series: Catalog<Series> = Catalog(),
+    /** Téléchargements hors ligne : sur tablette et téléphone seulement. */
+    val downloadsEnabled: Boolean = false,
+    val downloads: List<DownloadItem> = emptyList(),
+    val freeBytes: Long = 0,
     val library: Library? = null,
     val libraryLoading: Boolean = false,
     val recentMovies: List<Movie> = emptyList(),
@@ -303,6 +312,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val diskCache = DiskCache(app)
     private val updater = Updater(app)
     private val watchNext = WatchNext(app)
+    private val downloads = Downloads(app)
     private var client: XtreamClient? = null
 
     private var detailJob: Job? = null
@@ -432,6 +442,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         store.load()?.let { login(it) }
+        if (!app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            _state.update { it.copy(downloadsEnabled = true) }
+            viewModelScope.launch {
+                while (true) {
+                    publishDownloads(withContext(Dispatchers.IO) { downloads.refresh() })
+                    val active = _state.value.downloads.any {
+                        it.state == DownloadState.Queued || it.state == DownloadState.Running
+                    }
+                    delay(if (active) 2_000 else 30_000)
+                }
+            }
+        }
         // Horloge interne : rappels, économiseur d'écran, sauvegarde du bilan
         viewModelScope.launch {
             while (true) {
@@ -448,6 +470,59 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         statsStore.flush()
         super.onCleared()
     }
+
+    // ---------- Téléchargements ----------
+
+    private fun publishDownloads(items: List<DownloadItem>) {
+        _state.update { it.copy(downloads = items, freeBytes = downloads.freeBytes()) }
+    }
+
+    private fun updateDownloads(action: () -> List<DownloadItem>) {
+        viewModelScope.launch { publishDownloads(withContext(Dispatchers.IO) { action() }) }
+    }
+
+    fun openDownloads() = push(Route.Downloads)
+
+    /** Bouton d'une fiche : télécharge, réessaie après un échec, ou lit le fichier s'il est prêt. */
+    private fun downloadOrPlay(item: DownloadItem) {
+        val existing = _state.value.downloads.firstOrNull { it.id == item.id }
+        when {
+            existing == null -> updateDownloads { downloads.add(item) }
+            existing.state == DownloadState.Failed -> retryDownload(existing)
+            existing.state == DownloadState.Done -> playDownload(existing)
+        }
+    }
+
+    fun downloadMovie(movie: Movie, extension: String?) {
+        val c = client ?: return
+        val ext = extension ?: movie.extension
+        downloadOrPlay(
+            DownloadItem(movieKey(movie), movie.name, null, movie.poster, c.movieUrl(movie, ext), ext),
+        )
+    }
+
+    fun downloadEpisode(series: Series, episode: Episode) {
+        val c = client ?: return
+        downloadOrPlay(
+            DownloadItem(
+                id = episodeKey(episode),
+                title = series.name,
+                subtitle = "S${episode.season} · É${episode.number} · ${episode.title}",
+                image = episode.image ?: series.backdrop,
+                url = c.episodeUrl(episode),
+                extension = episode.extension,
+            ),
+        )
+    }
+
+    fun playDownload(item: DownloadItem) {
+        val file = downloads.fileUri(item) ?: return retryDownload(item)
+        push(Route.VodPlayer(title = item.title, subtitle = item.subtitle, url = file, resumeKey = item.id))
+    }
+
+    fun retryDownload(item: DownloadItem) = updateDownloads { downloads.retry(item.id) }
+
+    fun removeDownload(item: DownloadItem) = updateDownloads { downloads.remove(item.id) }
 
     // ---------- Connexion ----------
 

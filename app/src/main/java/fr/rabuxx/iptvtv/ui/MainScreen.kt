@@ -105,6 +105,7 @@ fun MainScreen(state: UiState, vm: MainViewModel) {
             updateBadge = state.update is UpdateState.Available,
             sleepEndsAt = state.sleepEndsAt,
             onSelect = vm::selectSection,
+            onDownloads = if (state.downloadsEnabled) vm::openDownloads else null,
         )
 
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -257,6 +258,7 @@ private fun TopBar(
     updateBadge: Boolean,
     sleepEndsAt: Long?,
     onSelect: (Section) -> Unit,
+    onDownloads: (() -> Unit)?,
 ) {
     Box(
         Modifier
@@ -285,6 +287,7 @@ private fun TopBar(
                     modifier = if (section == selected) Modifier.focusRequester(tabFocus) else Modifier,
                 )
             }
+            onDownloads?.let { ChipButton(label = "⬇", selected = false, onClick = it) }
         }
         Clock(sleepEndsAt, Modifier.align(Alignment.CenterEnd))
     }
