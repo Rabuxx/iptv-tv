@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "IptvTv"
 include(":app")
+include(":home")

@@ -216,6 +216,15 @@ adb connect 192.168.1.13:5555
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
+## Rabux Home (écran d'accueil)
+
+Le module `home` est une app séparée, `fr.rabuxx.home`, qui remplace l'écran d'accueil de la TV : grande zone en haut qui suit l'app sélectionnée, rangée d'apps en bas, heure et accès aux réglages. L'APK est disponible dans les artefacts de GitHub Actions. Il n'est **pas** publié dans les Releases, car le système de mise à jour de Rabux TV prendrait son APK pour le sien.
+
+```bash
+./gradlew :home:assembleDebug
+adb install -r home/build/outputs/apk/debug/home-debug.apk
+```
+
 ## Pistes pour la suite
 
 - Guide TV (EPG) sous les chaînes du direct
