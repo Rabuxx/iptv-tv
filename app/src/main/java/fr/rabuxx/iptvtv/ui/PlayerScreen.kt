@@ -906,7 +906,7 @@ fun VodPlayerScreen(
                 // Le serveur refuse le fichier (4xx) : réessayer ne changerait rien, on affiche le code tout de suite
                 val http = e.cause as? HttpDataSource.InvalidResponseCodeException
                 if (http != null && http.responseCode in 400..499) {
-                    error = "Lecture refusée par le serveur (HTTP ${http.responseCode}, ${http.dataSpec.uri.host})"
+                    error = "Lecture refusée par le serveur (HTTP ${http.responseCode}, ${maskStreamPath(http.dataSpec.uri.path)})"
                     return
                 }
                 // Coupure réseau : on relance depuis la position courante

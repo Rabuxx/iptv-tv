@@ -31,4 +31,12 @@ class FormatTest {
         assertEquals("5:12", formatClock(312_000))
         assertEquals("0:00", formatClock(-5))
     }
+
+    @Test
+    fun cheminDeFluxSansIdentifiantsEnClair() {
+        assertEquals(
+            "movie/ab…yz(8)/12…89(6)/42.mp4",
+            maskStreamPath("/movie/abcdefyz/123789/42.mp4"),
+        )
+    }
 }

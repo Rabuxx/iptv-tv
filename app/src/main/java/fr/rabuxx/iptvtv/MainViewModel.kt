@@ -451,7 +451,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Connexion ----------
 
-    fun login(creds: Credentials) {
+    fun login(input: Credentials) {
+        // Les claviers tactiles ajoutent facilement un espace après une suggestion
+        val creds = input.copy(
+            server = input.server.trim(),
+            username = input.username.trim(),
+            password = input.password.trim(),
+        )
         if (creds.server.isBlank() || creds.username.isBlank() || creds.password.isBlank()) {
             _state.update { it.copy(loginError = "Renseigne le serveur, l'identifiant et le mot de passe") }
             return
