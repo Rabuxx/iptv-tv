@@ -138,7 +138,7 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     // Rapports de plantage (actifs seulement si un DSN Sentry est fourni)
-    implementation("io.sentry:sentry-android:7.14.0")
+    implementation("io.sentry:sentry-android:7.22.6")
 
     // Tests unitaires (JVM)
     testImplementation("junit:junit:4.13.2")
