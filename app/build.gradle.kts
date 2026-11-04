@@ -137,6 +137,8 @@ dependencies {
     // Envoi vers une Chromecast (tablette)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
     implementation("androidx.mediarouter:mediarouter:1.7.0")
+    // Même version que les tests d'interface : sinon, conflit à la compilation de ces tests
+    implementation("androidx.tracing:tracing:1.1.0")
 
     // QR code (connexion depuis le téléphone)
     implementation("com.google.zxing:core:3.5.3")
