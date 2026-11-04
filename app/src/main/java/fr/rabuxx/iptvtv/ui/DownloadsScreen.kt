@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.data.DownloadItem
 import fr.rabuxx.iptvtv.data.DownloadState
+import fr.rabuxx.iptvtv.data.downloadDetail
 import fr.rabuxx.iptvtv.data.formatBytes
 
 @Composable
@@ -81,7 +82,7 @@ private fun DownloadRow(
             item.subtitle?.let {
                 Text(it, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(statusOf(item), color = if (item.state == DownloadState.Failed) ErrorRed else TextSecondary, fontSize = 13.sp)
+            Text(downloadDetail(item), color = if (item.state == DownloadState.Failed) ErrorRed else TextSecondary, fontSize = 13.sp)
             if (item.state == DownloadState.Running) {
                 Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x4DFFFFFF), CircleShape)) {
                     Box(Modifier.fillMaxWidth(item.progress).fillMaxHeight().background(Color.White, CircleShape))
@@ -98,15 +99,4 @@ private fun DownloadRow(
         }
         ChipButton(label = "Supprimer", selected = false, onClick = onRemove)
     }
-}
-
-private fun statusOf(item: DownloadItem): String = when (item.state) {
-    DownloadState.Queued -> "En attente"
-    DownloadState.Running -> if (item.totalBytes > 0) {
-        "${formatBytes(item.bytes)} sur ${formatBytes(item.totalBytes)}"
-    } else {
-        "Démarrage… (attend le Wi-Fi si besoin)"
-    }
-    DownloadState.Done -> "Disponible hors ligne · ${formatBytes(item.totalBytes)}"
-    DownloadState.Failed -> "Échec. Vérifie qu'aucune lecture n'occupe ta connexion."
 }

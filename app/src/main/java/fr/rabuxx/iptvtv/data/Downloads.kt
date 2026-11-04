@@ -29,7 +29,8 @@ class Downloads(context: Context) {
     }
 
     fun retry(id: String): List<DownloadItem> = synchronized(LOCK) {
-        write(read().map { if (it.id == id) it.copy(state = DownloadState.Queued, systemId = -1, bytes = 0) else it })
+        samples.remove(id)
+        write(read().map { if (it.id == id) it.copy(state = DownloadState.Queued, systemId = -1, bytes = 0, failureCode = 0, pause = DownloadPause.None) else it })
         refreshLocked()
     }
 
@@ -69,9 +70,27 @@ class Downloads(context: Context) {
             manager.query(DownloadManager.Query().setFilterById(item.systemId)).use { c ->
                 if (!c.moveToFirst()) return@use item.copy(state = DownloadState.Failed)
                 val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                val reason = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                val bytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val pause = if (status == DownloadManager.STATUS_PAUSED) pauseFromReason(reason) else DownloadPause.None
+                val now = System.currentTimeMillis()
+                val last = samples[item.id]
+                samples[item.id] = Sample(bytes, now, last?.speed ?: 0)
+                val speed = if (last != null && now > last.time && pause == DownloadPause.None) {
+                    smoothSpeed(last.speed, (bytes - last.bytes).coerceAtLeast(0) * 1000 / (now - last.time))
+                } else {
+                    0L
+                }
+                samples[item.id] = Sample(bytes, now, speed)
                 item.copy(
-                    bytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
+                    bytes = bytes,
                     totalBytes = c.getLong(c.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
+                    pause = pause,
+                    speed = speed,
+                    // Une coupure compte une seule fois, à l'entrée en pause
+                    interruptions = item.interruptions +
+                        if (pause == DownloadPause.ServerRetry && item.pause != DownloadPause.ServerRetry) 1 else 0,
+                    failureCode = if (status == DownloadManager.STATUS_FAILED) reason else 0,
                     state = when (status) {
                         DownloadManager.STATUS_SUCCESSFUL -> DownloadState.Done
                         DownloadManager.STATUS_FAILED -> DownloadState.Failed
@@ -112,6 +131,10 @@ class Downloads(context: Context) {
                     state = DownloadState.valueOf(o.getString("state")),
                     bytes = o.optLong("bytes"),
                     totalBytes = o.optLong("totalBytes"),
+                    pause = runCatching { DownloadPause.valueOf(o.optString("pause")) }.getOrDefault(DownloadPause.None),
+                    interruptions = o.optInt("interruptions"),
+                    failureCode = o.optInt("failureCode"),
+                    speed = o.optLong("speed"),
                 )
             }
         }.getOrDefault(emptyList())
@@ -131,14 +154,21 @@ class Downloads(context: Context) {
                     .put("systemId", it.systemId)
                     .put("state", it.state.name)
                     .put("bytes", it.bytes)
-                    .put("totalBytes", it.totalBytes),
+                    .put("totalBytes", it.totalBytes)
+                    .put("pause", it.pause.name)
+                    .put("interruptions", it.interruptions)
+                    .put("failureCode", it.failureCode)
+                    .put("speed", it.speed),
             )
         }
         prefs.edit().putString("items", array.toString()).apply()
     }
 
+    private class Sample(val bytes: Long, val time: Long, val speed: Long)
+
     private companion object {
         val LOCK = Any()
+        val samples = HashMap<String, Sample>()
     }
 }
 
