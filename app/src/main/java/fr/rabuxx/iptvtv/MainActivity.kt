@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
@@ -46,6 +47,8 @@ import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.ui.AppDialogHost
 import fr.rabuxx.iptvtv.ui.AppTheme
 import fr.rabuxx.iptvtv.ui.ChannelSource
+import fr.rabuxx.iptvtv.cast.CastController
+import fr.rabuxx.iptvtv.ui.CastOverlay
 import fr.rabuxx.iptvtv.ui.DownloadsScreen
 import fr.rabuxx.iptvtv.ui.Glass
 import fr.rabuxx.iptvtv.ui.LivePlayerScreen
@@ -66,10 +69,16 @@ class MainActivity : ComponentActivity() {
 
     private val vm: MainViewModel by viewModels()
 
+    /** Chromecast : sur tablette et téléphone seulement. */
+    private var cast: CastController? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Lancement depuis l'accueil Android TV (« À suivre ») ou une notification de rappel
         if (savedInstanceState == null) vm.handleDeepLink(intent?.data)
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            cast = CastController.create(this)
+        }
 
         setContent {
             AppTheme {
@@ -147,6 +156,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 AppDialogHost(state.dialog, vm)
+                cast?.let { controller -> Box(Modifier.fillMaxSize()) { CastOverlay(controller) } }
             }
         }
     }
@@ -214,6 +224,9 @@ class MainActivity : ComponentActivity() {
                     null
                 },
                 onDownload = { ext -> vm.downloadMovie(route.movie, ext) },
+                onCast = cast?.let { controller ->
+                    { ext -> vm.castMovie(route.movie, ext)?.let(controller::cast) }
+                },
             )
 
             is Route.SeriesDetail -> SeriesDetailScreen(
@@ -237,6 +250,9 @@ class MainActivity : ComponentActivity() {
                     null
                 },
                 onDownload = { vm.downloadEpisode(route.series, it) },
+                onCast = cast?.let { controller ->
+                    { episode -> vm.castEpisode(route.series, episode)?.let(controller::cast) }
+                },
             )
 
             is Route.Replay -> ReplayScreen(

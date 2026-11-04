@@ -134,6 +134,10 @@ dependencies {
     // Rangée « À suivre » de l'écran d'accueil Android TV
     implementation("androidx.tvprovider:tvprovider:1.0.0")
 
+    // Envoi vers une Chromecast (tablette)
+    implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+
     // QR code (connexion depuis le téléphone)
     implementation("com.google.zxing:core:3.5.3")
 

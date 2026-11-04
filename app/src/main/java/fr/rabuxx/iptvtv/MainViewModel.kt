@@ -23,6 +23,7 @@ import fr.rabuxx.iptvtv.data.EpgProgram
 import fr.rabuxx.iptvtv.data.Episode
 import fr.rabuxx.iptvtv.data.FAVORITES_CATEGORY
 import fr.rabuxx.iptvtv.data.Favorites
+import fr.rabuxx.iptvtv.cast.CastMedia
 import fr.rabuxx.iptvtv.data.DownloadItem
 import fr.rabuxx.iptvtv.data.DownloadState
 import fr.rabuxx.iptvtv.data.Downloads
@@ -512,6 +513,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 url = c.episodeUrl(episode),
                 extension = episode.extension,
             ),
+        )
+    }
+
+    fun castMovie(movie: Movie, extension: String?): CastMedia? {
+        val c = client ?: return null
+        val ext = extension ?: movie.extension
+        return CastMedia(movie.name, null, movie.poster, c.movieUrl(movie, ext), ext, store.position(movieKey(movie)))
+    }
+
+    fun castEpisode(series: Series, episode: Episode): CastMedia? {
+        val c = client ?: return null
+        return CastMedia(
+            title = series.name,
+            subtitle = "S${episode.season} · É${episode.number} · ${episode.title}",
+            image = episode.image ?: series.backdrop,
+            url = c.episodeUrl(episode),
+            extension = episode.extension,
+            positionMs = store.position(episodeKey(episode)),
         )
     }
 
