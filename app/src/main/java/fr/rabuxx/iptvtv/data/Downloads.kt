@@ -47,6 +47,8 @@ class Downloads(context: Context) {
 
     fun fileUri(item: DownloadItem): String? = file(item)?.takeIf { it.exists() }?.let { Uri.fromFile(it).toString() }
 
+    fun localFile(item: DownloadItem): File? = file(item)?.takeIf { it.exists() }
+
     fun freeBytes(): Long = folder?.usableSpace ?: 0
 
     private fun file(item: DownloadItem): File? = folder?.let { File(it, item.fileName) }

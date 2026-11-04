@@ -35,6 +35,7 @@ fun DownloadsScreen(
     onPlay: (DownloadItem) -> Unit,
     onRetry: (DownloadItem) -> Unit,
     onRemove: (DownloadItem) -> Unit,
+    onCast: ((DownloadItem) -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
         Text("Téléchargements", fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -52,7 +53,7 @@ fun DownloadsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(items, key = { it.id }) { item ->
-                    DownloadRow(item, { onPlay(item) }, { onRetry(item) }, { onRemove(item) })
+                    DownloadRow(item, { onPlay(item) }, { onRetry(item) }, { onRemove(item) }, onCast?.let { cast -> { cast(item) } })
                 }
             }
         }
@@ -60,7 +61,13 @@ fun DownloadsScreen(
 }
 
 @Composable
-private fun DownloadRow(item: DownloadItem, onPlay: () -> Unit, onRetry: () -> Unit, onRemove: () -> Unit) {
+private fun DownloadRow(
+    item: DownloadItem,
+    onPlay: () -> Unit,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit,
+    onCast: (() -> Unit)?,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -82,7 +89,10 @@ private fun DownloadRow(item: DownloadItem, onPlay: () -> Unit, onRetry: () -> U
             }
         }
         when (item.state) {
-            DownloadState.Done -> ActionButton("▶  Lire", onClick = onPlay)
+            DownloadState.Done -> {
+                ActionButton("▶  Lire", onClick = onPlay)
+                onCast?.let { ActionButton("Chromecast", onClick = it) }
+            }
             DownloadState.Failed -> ActionButton("Réessayer", onClick = onRetry)
             else -> Unit
         }

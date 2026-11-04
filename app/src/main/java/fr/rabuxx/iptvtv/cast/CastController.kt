@@ -16,6 +16,7 @@ import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
+import java.io.File
 
 /**
  * Envoi vers une Chromecast. Le fichier est lu directement par la Chromecast depuis le serveur :
@@ -32,6 +33,7 @@ class CastController private constructor(context: Context, private val castConte
         .build()
 
     private var pending: CastMedia? = null
+    private val fileServer = LocalFileServer()
 
     var pickerOpen by mutableStateOf(false)
         private set
@@ -94,6 +96,16 @@ class CastController private constructor(context: Context, private val castConte
         }
     }
 
+    /** Fichier téléchargé : la tablette le diffuse elle-même sur le Wi-Fi. */
+    fun castFile(media: CastMedia, file: File) {
+        val url = fileServer.serve(file, castContentType(media.extension))
+        if (url == null) {
+            error = "Connecte la tablette au même Wi-Fi que la Chromecast"
+            return
+        }
+        cast(media.copy(url = url))
+    }
+
     fun connect(route: MediaRouter.RouteInfo) {
         closePicker(keepPending = true)
         router.selectRoute(route)
@@ -133,6 +145,7 @@ class CastController private constructor(context: Context, private val castConte
     }
 
     private fun detach(session: CastSession) {
+        fileServer.stop()
         session.remoteMediaClient?.unregisterCallback(mediaCallback)
         connectedTo = null
         title = null

@@ -267,6 +267,9 @@ class MainActivity : ComponentActivity() {
                 onPlay = vm::playDownload,
                 onRetry = vm::retryDownload,
                 onRemove = vm::removeDownload,
+                onCast = cast?.let { controller ->
+                    { item -> vm.castDownload(item)?.let { (media, file) -> controller.castFile(media, file) } }
+                },
             )
 
             Route.Sport -> SportScreen(
