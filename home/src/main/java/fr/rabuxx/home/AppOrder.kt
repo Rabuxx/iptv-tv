@@ -7,7 +7,7 @@ import java.util.Locale
 val PINNED_PACKAGES = listOf(
     "fr.rabuxx.iptvtv",
     "com.netflix.ninja",
-    "com.google.android.youtube.tv",
+    "org.smarttube.stable",
     "com.disney.disneyplus",
     "com.amazon.amazonvideo.livingroom",
 )

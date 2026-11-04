@@ -21,6 +21,9 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var catalog: AppCatalog
     private var apps by mutableStateOf<List<AppEntry>>(emptyList())
+    private var shelf by mutableStateOf<List<ShelfItem>>(emptyList())
+    private var weather by mutableStateOf<Weather?>(null)
+    private var weatherLoadedAt = 0L
     private var launchedAsHome by mutableStateOf(false)
 
     // Une app installée, mise à jour ou supprimée : la rangée se met à jour toute seule
@@ -51,9 +54,31 @@ class MainActivity : ComponentActivity() {
             BackHandler(enabled = launchedAsHome) {}
             HomeScreen(
                 apps = apps,
+                shelf = shelf,
+                weather = weather,
                 onOpen = { catalog.launch(it) },
+                onOpenContent = { catalog.openContent(it.uri) },
                 onSettings = { catalog.openSettings() },
             )
+        }
+    }
+
+    // Au retour sur l'accueil, l'historique de Rabux TV a pu changer
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            shelf = withContext(Dispatchers.IO) { TopShelf.load(applicationContext) }
+        }
+        // L'accueil reste ouvert des jours : la météo se rafraîchit toutes les 30 min, à chaque retour dessus
+        val now = System.currentTimeMillis()
+        if (now - weatherLoadedAt > WEATHER_REFRESH_MS) {
+            lifecycleScope.launch {
+                val fresh = withContext(Dispatchers.IO) { WeatherApi.load() }
+                if (fresh != null) {
+                    weather = fresh
+                    weatherLoadedAt = now
+                }
+            }
         }
     }
 
@@ -66,6 +91,10 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         unregisterReceiver(packagesChanged)
         super.onDestroy()
+    }
+
+    private companion object {
+        const val WEATHER_REFRESH_MS = 30 * 60 * 1000L
     }
 
     private fun isHomeIntent(intent: Intent?) = intent?.hasCategory(Intent.CATEGORY_HOME) == true
