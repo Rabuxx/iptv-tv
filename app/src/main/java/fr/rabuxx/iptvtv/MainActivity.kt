@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.inputmethod.InputMethodManager
@@ -46,6 +47,9 @@ import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.ui.AppDialogHost
 import fr.rabuxx.iptvtv.ui.AppTheme
 import fr.rabuxx.iptvtv.ui.ChannelSource
+import fr.rabuxx.iptvtv.cast.CastController
+import fr.rabuxx.iptvtv.ui.CastOverlay
+import fr.rabuxx.iptvtv.ui.DownloadsScreen
 import fr.rabuxx.iptvtv.ui.Glass
 import fr.rabuxx.iptvtv.ui.LivePlayerScreen
 import fr.rabuxx.iptvtv.ui.LocalSubtitles
@@ -65,10 +69,16 @@ class MainActivity : ComponentActivity() {
 
     private val vm: MainViewModel by viewModels()
 
+    /** Chromecast : sur tablette et téléphone seulement. */
+    private var cast: CastController? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Lancement depuis l'accueil Android TV (« À suivre ») ou une notification de rappel
         if (savedInstanceState == null) vm.handleDeepLink(intent?.data)
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+            cast = CastController.create(this)
+        }
 
         setContent {
             AppTheme {
@@ -146,6 +156,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 AppDialogHost(state.dialog, vm)
+                cast?.let { controller -> Box(Modifier.fillMaxSize()) { CastOverlay(controller) } }
             }
         }
     }
@@ -192,6 +203,7 @@ class MainActivity : ComponentActivity() {
                 error = state.loginError,
                 onSubmit = vm::login,
                 onPhoneForm = { form -> vm.onPhoneForm(fr.rabuxx.iptvtv.data.PhoneLinkMode.Login, form) },
+                onDownloads = if (state.downloads.isNotEmpty()) vm::openDownloads else null,
             )
 
             Route.Main -> MainScreen(state = state, vm = vm)
@@ -206,6 +218,15 @@ class MainActivity : ComponentActivity() {
                 tmdb = state.tmdb.data?.takeIf { state.tmdbFor == vm.movieKey(route.movie) },
                 onTrailer = ::openTrailer,
                 onOpenMovie = { vm.openMovie(it) },
+                downloadLabel = if (state.downloadsEnabled) {
+                    fr.rabuxx.iptvtv.data.downloadLabel(state.downloads.firstOrNull { it.id == vm.movieKey(route.movie) })
+                } else {
+                    null
+                },
+                onDownload = { ext -> vm.downloadMovie(route.movie, ext) },
+                onCast = cast?.let { controller ->
+                    { ext -> vm.castMovie(route.movie, ext)?.let(controller::cast) }
+                },
             )
 
             is Route.SeriesDetail -> SeriesDetailScreen(
@@ -221,12 +242,31 @@ class MainActivity : ComponentActivity() {
                 tmdb = state.tmdb.data?.takeIf { state.tmdbFor == vm.seriesKey(route.series) },
                 onTrailer = ::openTrailer,
                 onOpenSeries = { vm.openSeries(it) },
+                downloadLabelOf = if (state.downloadsEnabled) {
+                    { episode ->
+                        fr.rabuxx.iptvtv.data.downloadLabel(state.downloads.firstOrNull { it.id == vm.episodeKey(episode) })
+                    }
+                } else {
+                    null
+                },
+                onDownload = { vm.downloadEpisode(route.series, it) },
+                onCast = cast?.let { controller ->
+                    { episode -> vm.castEpisode(route.series, episode)?.let(controller::cast) }
+                },
             )
 
             is Route.Replay -> ReplayScreen(
                 channel = route.channel,
                 detail = state.replay,
                 onPlay = { vm.playReplay(route.channel, it) },
+            )
+
+            Route.Downloads -> DownloadsScreen(
+                items = state.downloads,
+                freeBytes = state.freeBytes,
+                onPlay = vm::playDownload,
+                onRetry = vm::retryDownload,
+                onRemove = vm::removeDownload,
             )
 
             Route.Sport -> SportScreen(

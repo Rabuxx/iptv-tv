@@ -32,3 +32,14 @@ fun formatClock(ms: Long): String {
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
+
+/**
+ * Chemin d'un flux lisible à l'écran sans dévoiler les identifiants :
+ * /movie/<identifiant>/<mot de passe>/12.mp4 → movie/V5…sm(16)/wY…sW(16)/12.mp4
+ */
+fun maskStreamPath(path: String?): String {
+    val parts = path.orEmpty().trim('/').split('/')
+    if (parts.size < 4) return path.orEmpty()
+    fun mask(s: String) = "${s.take(2)}…${s.takeLast(2)}(${s.length})"
+    return listOf(parts[0], mask(parts[1]), mask(parts[2])).plus(parts.drop(3)).joinToString("/")
+}

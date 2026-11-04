@@ -25,11 +25,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.LocalContentColor
-import androidx.tv.material3.Surface
 import fr.rabuxx.iptvtv.data.EpgProgram
 import fr.rabuxx.iptvtv.data.nowPlaying
 import fr.rabuxx.iptvtv.data.progress
 import fr.rabuxx.iptvtv.data.upNext
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +56,7 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -76,7 +77,9 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
@@ -143,7 +146,8 @@ internal fun rememberIptvPlayer(vod: Boolean = false, counter: NetCounter? = nul
             )
         }
         builder
-            .setMediaSourceFactory(DefaultMediaSourceFactory(http))
+            // DefaultDataSource lit aussi les fichiers téléchargés
+            .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, http)))
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build()
@@ -901,6 +905,12 @@ fun VodPlayerScreen(
                     ended = true
                     return
                 }
+                // Le serveur refuse le fichier (4xx) : réessayer ne changerait rien, on affiche le code tout de suite
+                val http = e.cause as? HttpDataSource.InvalidResponseCodeException
+                if (http != null && http.responseCode in 400..499) {
+                    error = "Lecture refusée par le serveur (HTTP ${http.responseCode}, ${maskStreamPath(http.dataSpec.uri.path)})"
+                    return
+                }
                 // Coupure réseau : on relance depuis la position courante
                 if (retries < VOD_MAX_RETRIES) {
                     retries++
@@ -1064,6 +1074,25 @@ fun VodPlayerScreen(
     }) {
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player)
+
+            // Au doigt : tiers gauche et droit pour reculer ou avancer, centre pour la pause, appui long pour les pistes
+            Box(
+                Modifier.fillMaxSize().pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { tapAt ->
+                            val third = size.width / 3f
+                            when {
+                                tapAt.x < third -> { player.seekBack(); position = player.currentPosition }
+                                tapAt.x > third * 2 -> { player.seekForward(); position = player.currentPosition }
+                                player.isPlaying -> player.pause()
+                                else -> player.play()
+                            }
+                            touch()
+                        },
+                        onLongPress = { tracksOpen = true; touch() },
+                    )
+                },
+            )
 
             if (infoOpen) {
                 PlaybackInfoPanel(info, playing, Modifier.align(Alignment.TopEnd).padding(top = 24.dp, end = 32.dp))

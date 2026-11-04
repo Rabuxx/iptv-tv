@@ -12,7 +12,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextAlign
 import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.Surface
 import fr.rabuxx.iptvtv.TmdbView
 import fr.rabuxx.iptvtv.data.CastMember
 import androidx.compose.foundation.layout.Arrangement
@@ -140,6 +139,10 @@ fun MovieDetailScreen(
     tmdb: TmdbView?,
     onTrailer: (String) -> Unit,
     onOpenMovie: (Movie) -> Unit,
+    /** Null sur TV : pas de téléchargement. */
+    downloadLabel: String? = null,
+    onDownload: (extension: String?) -> Unit = {},
+    onCast: ((extension: String?) -> Unit)? = null,
 ) {
     val info = detail.data
     val extra = tmdb?.details
@@ -196,6 +199,8 @@ fun MovieDetailScreen(
                 }
                 extra?.trailerKey?.let { key -> ActionButton("Bande-annonce", onClick = { onTrailer(key) }) }
                 ActionButton(if (isFavorite) "★  Favori" else "☆  Favoris", onClick = onToggleFavorite)
+                downloadLabel?.let { ActionButton(it, onClick = { onDownload(ext) }) }
+                onCast?.let { cast -> ActionButton("Chromecast", onClick = { cast(ext) }) }
             }
 
             info?.director?.let { Text("Réalisation : $it", color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
@@ -222,6 +227,10 @@ fun SeriesDetailScreen(
     tmdb: TmdbView?,
     onTrailer: (String) -> Unit,
     onOpenSeries: (Series) -> Unit,
+    /** Null sur TV : pas de téléchargement. */
+    downloadLabelOf: ((Episode) -> String)? = null,
+    onDownload: (Episode) -> Unit = {},
+    onCast: ((Episode) -> Unit)? = null,
 ) {
     val info = detail.data
     val extra = tmdb?.details
@@ -330,6 +339,7 @@ fun SeriesDetailScreen(
                     ) {
                         itemsIndexed(episodes, key = { _, e -> e.id }) { index, episode ->
                             val watched = remember(watchedTick, episode.id) { watchedOf(episode) }
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             MediaCard(
                                 title = "${episode.number}. ${episode.title}",
                                 image = episode.image ?: series.backdrop ?: info?.backdrop,
@@ -349,6 +359,13 @@ fun SeriesDetailScreen(
                                     onPlay(episode)
                                 },
                             )
+                            downloadLabelOf?.let { label ->
+                                ChipButton(label = label(episode), selected = false, onClick = { onDownload(episode) })
+                            }
+                            onCast?.let { cast ->
+                                ChipButton(label = "Chromecast", selected = false, onClick = { cast(episode) })
+                            }
+                            }
                         }
                     }
                 }
