@@ -107,7 +107,9 @@ class Downloads(context: Context) {
             .setTitle(item.title)
             .setDescription(item.subtitle)
             .addRequestHeader("User-Agent", USER_AGENT)
-            .setAllowedOverMetered(false)
+            // Wi-Fi seulement, même si Android le considère à tort comme « limité » : sinon le téléchargement reste bloqué
+            .setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI)
+            .setAllowedOverMetered(true)
             .setAllowedOverRoaming(false)
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setDestinationInExternalFilesDir(appContext, Environment.DIRECTORY_MOVIES, item.fileName)
