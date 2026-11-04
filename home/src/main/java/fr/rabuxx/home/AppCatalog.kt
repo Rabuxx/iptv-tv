@@ -50,6 +50,13 @@ class AppCatalog(private val context: Context) {
         )
     }.isSuccess
 
+    /** Ouvre un contenu de Rabux TV (rabuxtv://history/...). */
+    fun openContent(uri: String): Boolean = runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+    }.isSuccess
+
     private fun toEntry(info: ResolveInfo): AppEntry {
         val pm = context.packageManager
         val banner = info.activityInfo.loadBanner(pm)
