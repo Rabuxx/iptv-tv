@@ -43,3 +43,7 @@ fun maskStreamPath(path: String?): String {
     fun mask(s: String) = "${s.take(2)}…${s.takeLast(2)}(${s.length})"
     return listOf(parts[0], mask(parts[1]), mask(parts[2])).plus(parts.drop(3)).joinToString("/")
 }
+
+/** Position visée quand on touche la barre de lecture. */
+fun seekPosition(x: Float, width: Int, durationMs: Long): Long =
+    if (width <= 0 || durationMs <= 0) 0L else ((x / width).coerceIn(0f, 1f) * durationMs).toLong()

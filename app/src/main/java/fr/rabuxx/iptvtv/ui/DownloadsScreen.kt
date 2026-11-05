@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.data.DownloadItem
 import fr.rabuxx.iptvtv.data.DownloadState
+import fr.rabuxx.iptvtv.data.downloadDetail
 import fr.rabuxx.iptvtv.data.formatBytes
 
 @Composable
@@ -35,6 +36,7 @@ fun DownloadsScreen(
     onPlay: (DownloadItem) -> Unit,
     onRetry: (DownloadItem) -> Unit,
     onRemove: (DownloadItem) -> Unit,
+    onCast: ((DownloadItem) -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 28.dp)) {
         Text("Téléchargements", fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -52,7 +54,7 @@ fun DownloadsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(items, key = { it.id }) { item ->
-                    DownloadRow(item, { onPlay(item) }, { onRetry(item) }, { onRemove(item) })
+                    DownloadRow(item, { onPlay(item) }, { onRetry(item) }, { onRemove(item) }, onCast?.let { cast -> { cast(item) } })
                 }
             }
         }
@@ -60,7 +62,13 @@ fun DownloadsScreen(
 }
 
 @Composable
-private fun DownloadRow(item: DownloadItem, onPlay: () -> Unit, onRetry: () -> Unit, onRemove: () -> Unit) {
+private fun DownloadRow(
+    item: DownloadItem,
+    onPlay: () -> Unit,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit,
+    onCast: (() -> Unit)?,
+) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -74,7 +82,7 @@ private fun DownloadRow(item: DownloadItem, onPlay: () -> Unit, onRetry: () -> U
             item.subtitle?.let {
                 Text(it, color = TextSecondary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text(statusOf(item), color = if (item.state == DownloadState.Failed) ErrorRed else TextSecondary, fontSize = 13.sp)
+            Text(downloadDetail(item), color = if (item.state == DownloadState.Failed) ErrorRed else TextSecondary, fontSize = 13.sp)
             if (item.state == DownloadState.Running) {
                 Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x4DFFFFFF), CircleShape)) {
                     Box(Modifier.fillMaxWidth(item.progress).fillMaxHeight().background(Color.White, CircleShape))
@@ -82,21 +90,13 @@ private fun DownloadRow(item: DownloadItem, onPlay: () -> Unit, onRetry: () -> U
             }
         }
         when (item.state) {
-            DownloadState.Done -> ActionButton("▶  Lire", onClick = onPlay)
+            DownloadState.Done -> {
+                ActionButton("▶  Lire", onClick = onPlay)
+                onCast?.let { ActionButton("Chromecast", onClick = it) }
+            }
             DownloadState.Failed -> ActionButton("Réessayer", onClick = onRetry)
             else -> Unit
         }
         ChipButton(label = "Supprimer", selected = false, onClick = onRemove)
     }
-}
-
-private fun statusOf(item: DownloadItem): String = when (item.state) {
-    DownloadState.Queued -> "En attente"
-    DownloadState.Running -> if (item.totalBytes > 0) {
-        "${formatBytes(item.bytes)} sur ${formatBytes(item.totalBytes)}"
-    } else {
-        "Démarrage… (attend le Wi-Fi si besoin)"
-    }
-    DownloadState.Done -> "Disponible hors ligne · ${formatBytes(item.totalBytes)}"
-    DownloadState.Failed -> "Échec. Vérifie qu'aucune lecture n'occupe ta connexion."
 }

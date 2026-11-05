@@ -1,5 +1,6 @@
 package fr.rabuxx.iptvtv.ui
 
+import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
@@ -29,6 +30,7 @@ import fr.rabuxx.iptvtv.data.EpgProgram
 import fr.rabuxx.iptvtv.data.nowPlaying
 import fr.rabuxx.iptvtv.data.progress
 import fr.rabuxx.iptvtv.data.upNext
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -82,6 +84,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
@@ -134,7 +137,11 @@ internal fun rememberIptvPlayer(vod: Boolean = false, counter: NetCounter? = nul
                 override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
             })
         }
-        val builder = ExoPlayer.Builder(context)
+        // Décodeur FFmpeg en secours, si l'appareil ne sait pas lire la piste audio ; le matériel reste prioritaire
+        val renderers = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
+        val builder = ExoPlayer.Builder(context, renderers)
         if (vod) {
             builder.setLoadControl(
                 DefaultLoadControl.Builder()
@@ -874,6 +881,11 @@ fun VodPlayerScreen(
     var interaction by remember { mutableIntStateOf(0) }
     var tracks by remember { mutableStateOf(Tracks.EMPTY) }
     var tracksOpen by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    // Tablette et téléphone : boutons à l'écran. Sur TV, la télécommande suffit.
+    val touchScreen = remember { !context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) }
+    // Position visée pendant que le doigt glisse sur la barre (fraction de 0 à 1)
+    var scrub by remember { mutableStateOf<Float?>(null) }
     var upNextDismissed by remember { mutableStateOf(false) }
     var countdown by remember { mutableIntStateOf(UP_NEXT_COUNTDOWN_S) }
 
@@ -1075,21 +1087,18 @@ fun VodPlayerScreen(
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player)
 
-            // Au doigt : tiers gauche et droit pour reculer ou avancer, centre pour la pause, appui long pour les pistes
+            // Au doigt : un appui affiche ou masque les commandes, deux appuis sur un côté reculent ou avancent de 10 s
             Box(
                 Modifier.fillMaxSize().pointerInput(Unit) {
                     detectTapGestures(
-                        onTap = { tapAt ->
-                            val third = size.width / 3f
-                            when {
-                                tapAt.x < third -> { player.seekBack(); position = player.currentPosition }
-                                tapAt.x > third * 2 -> { player.seekForward(); position = player.currentPosition }
-                                player.isPlaying -> player.pause()
-                                else -> player.play()
-                            }
+                        onTap = {
+                            if (controlsVisible) controlsVisible = false else touch()
+                        },
+                        onDoubleTap = { tapAt ->
+                            if (tapAt.x < size.width / 2f) player.seekBack() else player.seekForward()
+                            position = player.currentPosition
                             touch()
                         },
-                        onLongPress = { tracksOpen = true; touch() },
                     )
                 },
             )
@@ -1102,7 +1111,7 @@ fun VodPlayerScreen(
                 error != null -> ErrorBox(error!!, "Retour pour revenir à la fiche", Modifier.align(Alignment.Center))
                 pendingRetry || (retries > 0 && buffering) -> StatusText("Reconnexion…", Modifier.align(Alignment.Center))
                 buffering -> StatusText("Chargement…", Modifier.align(Alignment.Center))
-                !playing && !ended -> Box(
+                !playing && !ended && !touchScreen -> Box(
                     // Icône de pause au centre, comme sur Apple TV
                     Modifier.align(Alignment.Center).size(80.dp).background(Glass, CircleShape),
                     contentAlignment = Alignment.Center,
@@ -1132,6 +1141,30 @@ fun VodPlayerScreen(
                         }
                     }
 
+                    if (touchScreen) {
+                        Box(Modifier.align(Alignment.TopEnd).padding(top = 24.dp, end = 32.dp)) {
+                            ChipButton(label = "✕  Fermer", selected = false, onClick = onFinished)
+                        }
+                        Row(
+                            Modifier.align(Alignment.Center),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(28.dp),
+                        ) {
+                            ActionButton(
+                                "-10 s",
+                                onClick = { player.seekBack(); position = player.currentPosition; touch() },
+                            )
+                            ActionButton(
+                                if (playing) "❚❚  Pause" else "▶  Lecture",
+                                onClick = { if (player.isPlaying) player.pause() else player.play(); touch() },
+                            )
+                            ActionButton(
+                                "+10 s",
+                                onClick = { player.seekForward(); position = player.currentPosition; touch() },
+                            )
+                        }
+                    }
+
                     // Barre de progression en bas
                     Column(
                         Modifier
@@ -1140,8 +1173,38 @@ fun VodPlayerScreen(
                             .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xB3000000))))
                             .padding(start = 48.dp, end = 48.dp, top = 44.dp, bottom = 28.dp),
                     ) {
-                        val fraction = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                        val fraction = scrub ?: if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
                         val bufferedFraction = if (duration > 0) (buffered.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                        // Zone tactile plus haute que la barre : plus facile à attraper au doigt
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(if (touchScreen) 32.dp else 6.dp)
+                                .pointerInput(duration) {
+                                    detectTapGestures { tapAt ->
+                                        player.seekTo(seekPosition(tapAt.x, size.width, duration))
+                                        position = player.currentPosition
+                                        touch()
+                                    }
+                                }
+                                .pointerInput(duration) {
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { start -> scrub = (start.x / size.width).coerceIn(0f, 1f) },
+                                        onHorizontalDrag = { change, _ ->
+                                            change.consume()
+                                            scrub = (change.position.x / size.width).coerceIn(0f, 1f)
+                                            touch()
+                                        },
+                                        onDragEnd = {
+                                            scrub?.let { player.seekTo((it * duration).toLong()) }
+                                            position = player.currentPosition
+                                            scrub = null
+                                        },
+                                        onDragCancel = { scrub = null },
+                                    )
+                                },
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -1162,10 +1225,23 @@ fun VodPlayerScreen(
                                     .background(Color.White, CircleShape),
                             )
                         }
+                        }
                         Spacer(Modifier.height(8.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(formatClock(position), color = Color(0xCCFFFFFF), fontSize = 13.sp)
-                            Text("↑  Infos de lecture   ·   ↓  Audio et sous-titres", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                formatClock(scrub?.let { (it * duration).toLong() } ?: position),
+                                color = Color(0xCCFFFFFF),
+                                fontSize = 13.sp,
+                            )
+                            if (touchScreen) {
+                                ChipButton(label = "Audio et sous-titres", selected = false, onClick = { tracksOpen = true; touch() })
+                            } else {
+                                Text("↑  Infos de lecture   ·   ↓  Audio et sous-titres", color = Color(0x99FFFFFF), fontSize = 12.sp)
+                            }
                             Text(
                                 if (duration > 0) "-" + formatClock(duration - position) else "",
                                 color = Color(0xCCFFFFFF),

@@ -534,6 +534,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** Fichier téléchargé à diffuser, et sa position de reprise. */
+    fun castDownload(item: DownloadItem): Pair<CastMedia, java.io.File>? {
+        val file = downloads.localFile(item) ?: return null
+        return CastMedia(item.title, item.subtitle, item.image, item.url, item.extension, store.position(item.id)) to file
+    }
+
     fun playDownload(item: DownloadItem) {
         val file = downloads.fileUri(item) ?: return retryDownload(item)
         push(Route.VodPlayer(title = item.title, subtitle = item.subtitle, url = file, resumeKey = item.id))

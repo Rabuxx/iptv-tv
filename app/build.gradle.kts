@@ -45,7 +45,7 @@ val hasReleaseKey = keystorePath != null && rootProject.file(keystorePath).exist
 
 android {
     namespace = "fr.rabuxx.iptvtv"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "fr.rabuxx.iptvtv"
@@ -121,10 +121,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 
     // Lecteur vidéo
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
-    implementation("androidx.media3:media3-datasource:1.4.1")
-    implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.5.0")
+    implementation("androidx.media3:media3-exoplayer-hls:1.5.0")
+    implementation("androidx.media3:media3-datasource:1.5.0")
+    implementation("androidx.media3:media3-ui:1.5.0")
+    // Décodeur logiciel : AC3, E-AC3, DTS… sur les tablettes qui n'ont pas ces décodeurs
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
 
     // Réseau + images
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

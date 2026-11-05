@@ -11,11 +11,13 @@ import com.google.android.gms.cast.CastMediaControlIntent
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaSeekOptions
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.google.android.gms.common.images.WebImage
+import java.io.File
 
 /**
  * Envoi vers une Chromecast. Le fichier est lu directement par la Chromecast depuis le serveur :
@@ -32,6 +34,7 @@ class CastController private constructor(context: Context, private val castConte
         .build()
 
     private var pending: CastMedia? = null
+    private val fileServer = LocalFileServer()
 
     var pickerOpen by mutableStateOf(false)
         private set
@@ -46,6 +49,15 @@ class CastController private constructor(context: Context, private val castConte
     var error by mutableStateOf<String?>(null)
         private set
 
+    var positionMs by mutableStateOf(0L)
+        private set
+    var durationMs by mutableStateOf(0L)
+        private set
+
+    /** Volume de la Chromecast, de 0 à 1. */
+    var volume by mutableStateOf(0.0)
+        private set
+
     private val routerCallback = object : MediaRouter.Callback() {
         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) = refreshDevices()
         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) = refreshDevices()
@@ -54,8 +66,17 @@ class CastController private constructor(context: Context, private val castConte
 
     private val mediaCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
-            playing = client?.isPlaying == true
+            val remote = client ?: return
+            playing = remote.isPlaying
+            durationMs = remote.streamDuration
+            // Session reprise après une fermeture de l'app : le titre vient de la Chromecast
+            if (title == null) title = remote.mediaInfo?.metadata?.getString(MediaMetadata.KEY_TITLE)
         }
+    }
+
+    private val progressListener = RemoteMediaClient.ProgressListener { progress, duration ->
+        positionMs = progress
+        durationMs = duration
     }
 
     private val sessionListener = object : SessionManagerListener<CastSession> {
@@ -94,6 +115,16 @@ class CastController private constructor(context: Context, private val castConte
         }
     }
 
+    /** Fichier téléchargé : la tablette le diffuse elle-même sur le Wi-Fi. */
+    fun castFile(media: CastMedia, file: File) {
+        val url = fileServer.serve(file, castContentType(media.extension))
+        if (url == null) {
+            error = "Connecte la tablette au même Wi-Fi que la Chromecast"
+            return
+        }
+        cast(media.copy(url = url))
+    }
+
     fun connect(route: MediaRouter.RouteInfo) {
         closePicker(keepPending = true)
         router.selectRoute(route)
@@ -103,6 +134,28 @@ class CastController private constructor(context: Context, private val castConte
         pickerOpen = false
         router.removeCallback(routerCallback)
         if (!keepPending) pending = null
+    }
+
+    /** Touches de volume ou boutons de l'écran : monte ou baisse le son de la Chromecast. */
+    fun changeVolume(delta: Double) {
+        val current = session?.takeIf { it.isConnected } ?: return
+        val target = (current.volume + delta).coerceIn(0.0, 1.0)
+        runCatching {
+            current.setVolume(target)
+            volume = target
+        }
+    }
+
+    fun seekBy(deltaMs: Long) {
+        val remote = client ?: return
+        seekTo(remote.approximateStreamPosition + deltaMs)
+    }
+
+    fun seekTo(targetMs: Long) {
+        val remote = client ?: return
+        val target = targetMs.coerceIn(0, remote.streamDuration.coerceAtLeast(0))
+        remote.seek(MediaSeekOptions.Builder().setPosition(target).build())
+        positionMs = target
     }
 
     fun togglePause() {
@@ -124,8 +177,13 @@ class CastController private constructor(context: Context, private val castConte
 
     private fun attach(session: CastSession) {
         connectedTo = session.castDevice?.friendlyName
-        session.remoteMediaClient?.unregisterCallback(mediaCallback)
-        session.remoteMediaClient?.registerCallback(mediaCallback)
+        runCatching { volume = session.volume }
+        session.remoteMediaClient?.let {
+            it.unregisterCallback(mediaCallback)
+            it.registerCallback(mediaCallback)
+            it.removeProgressListener(progressListener)
+            it.addProgressListener(progressListener, PROGRESS_INTERVAL_MS)
+        }
         pending?.let {
             pending = null
             load(it)
@@ -133,7 +191,11 @@ class CastController private constructor(context: Context, private val castConte
     }
 
     private fun detach(session: CastSession) {
+        fileServer.stop()
         session.remoteMediaClient?.unregisterCallback(mediaCallback)
+        session.remoteMediaClient?.removeProgressListener(progressListener)
+        positionMs = 0
+        durationMs = 0
         connectedTo = null
         title = null
         playing = false
@@ -166,6 +228,8 @@ class CastController private constructor(context: Context, private val castConte
     }
 
     companion object {
+        private const val PROGRESS_INTERVAL_MS = 1_000L
+
         /** Null si les services Google Cast ne sont pas disponibles. */
         fun create(context: Context): CastController? = runCatching {
             CastController(context.applicationContext, CastContext.getSharedInstance(context.applicationContext))

@@ -42,6 +42,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.ui.AppDialogHost
@@ -71,13 +74,16 @@ class MainActivity : ComponentActivity() {
 
     /** Chromecast : sur tablette et téléphone seulement. */
     private var cast: CastController? = null
+    private var touchScreen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Lancement depuis l'accueil Android TV (« À suivre ») ou une notification de rappel
         if (savedInstanceState == null) vm.handleDeepLink(intent?.data)
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+        touchScreen = !packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        if (touchScreen) {
             cast = CastController.create(this)
+            hideSystemBars()
         }
 
         setContent {
@@ -161,6 +167,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && touchScreen) hideSystemBars()
+    }
+
+    /** Plein écran sur tablette : les barres système ne reviennent qu'en glissant depuis le bord. */
+    private fun hideSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     /** Toute touche réveille l'économiseur d'écran, sans agir sur l'écran qu'il recouvre. */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (vm.state.value.screensaverActive) {
@@ -168,6 +188,15 @@ class MainActivity : ComponentActivity() {
             return true
         }
         vm.onUserActivity()
+        // Pendant un cast, les touches de volume de la tablette règlent la Chromecast
+        val controller = cast
+        val volumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (volumeKey && controller?.connectedTo != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                controller.changeVolume(if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) 0.05 else -0.05)
+            }
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 
@@ -267,6 +296,9 @@ class MainActivity : ComponentActivity() {
                 onPlay = vm::playDownload,
                 onRetry = vm::retryDownload,
                 onRemove = vm::removeDownload,
+                onCast = cast?.let { controller ->
+                    { item -> vm.castDownload(item)?.let { (media, file) -> controller.castFile(media, file) } }
+                },
             )
 
             Route.Sport -> SportScreen(
