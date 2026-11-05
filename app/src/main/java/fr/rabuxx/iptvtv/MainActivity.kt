@@ -42,6 +42,9 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.ui.AppDialogHost
@@ -71,13 +74,16 @@ class MainActivity : ComponentActivity() {
 
     /** Chromecast : sur tablette et téléphone seulement. */
     private var cast: CastController? = null
+    private var touchScreen = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Lancement depuis l'accueil Android TV (« À suivre ») ou une notification de rappel
         if (savedInstanceState == null) vm.handleDeepLink(intent?.data)
-        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+        touchScreen = !packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+        if (touchScreen) {
             cast = CastController.create(this)
+            hideSystemBars()
         }
 
         setContent {
@@ -158,6 +164,20 @@ class MainActivity : ComponentActivity() {
                 AppDialogHost(state.dialog, vm)
                 cast?.let { controller -> Box(Modifier.fillMaxSize()) { CastOverlay(controller) } }
             }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && touchScreen) hideSystemBars()
+    }
+
+    /** Plein écran sur tablette : les barres système ne reviennent qu'en glissant depuis le bord. */
+    private fun hideSystemBars() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 
