@@ -45,7 +45,7 @@ val hasReleaseKey = keystorePath != null && rootProject.file(keystorePath).exist
 
 android {
     namespace = "fr.rabuxx.iptvtv"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "fr.rabuxx.iptvtv"
