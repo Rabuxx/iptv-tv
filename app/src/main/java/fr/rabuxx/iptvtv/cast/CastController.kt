@@ -48,6 +48,10 @@ class CastController private constructor(context: Context, private val castConte
     var error by mutableStateOf<String?>(null)
         private set
 
+    /** Volume de la Chromecast, de 0 à 1. */
+    var volume by mutableStateOf(0.0)
+        private set
+
     private val routerCallback = object : MediaRouter.Callback() {
         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) = refreshDevices()
         override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) = refreshDevices()
@@ -117,6 +121,16 @@ class CastController private constructor(context: Context, private val castConte
         if (!keepPending) pending = null
     }
 
+    /** Touches de volume ou boutons de l'écran : monte ou baisse le son de la Chromecast. */
+    fun changeVolume(delta: Double) {
+        val current = session?.takeIf { it.isConnected } ?: return
+        val target = (current.volume + delta).coerceIn(0.0, 1.0)
+        runCatching {
+            current.setVolume(target)
+            volume = target
+        }
+    }
+
     fun togglePause() {
         client?.togglePlayback()
     }
@@ -136,6 +150,7 @@ class CastController private constructor(context: Context, private val castConte
 
     private fun attach(session: CastSession) {
         connectedTo = session.castDevice?.friendlyName
+        runCatching { volume = session.volume }
         session.remoteMediaClient?.unregisterCallback(mediaCallback)
         session.remoteMediaClient?.registerCallback(mediaCallback)
         pending?.let {

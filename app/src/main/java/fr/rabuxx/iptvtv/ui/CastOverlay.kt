@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import fr.rabuxx.iptvtv.cast.CastController
 
+private const val VOLUME_STEP = 0.05
+
 /** Choix de la Chromecast, puis barre de contrôle tant qu'une lecture est en cours. */
 @Composable
 fun BoxScope.CastOverlay(cast: CastController) {
@@ -53,6 +55,9 @@ fun BoxScope.CastOverlay(cast: CastController) {
                 ChipButton(label = if (cast.playing) "Pause" else "Lecture", selected = false, onClick = cast::togglePause)
             }
             if (device != null) {
+                ChipButton(label = "Vol -", selected = false, onClick = { cast.changeVolume(-VOLUME_STEP) })
+                Text("${(cast.volume * 100).toInt()} %", color = TextSecondary, fontSize = 13.sp)
+                ChipButton(label = "Vol +", selected = false, onClick = { cast.changeVolume(VOLUME_STEP) })
                 ChipButton(label = "Arrêter", selected = false, onClick = cast::stop)
             } else {
                 ChipButton(label = "Fermer", selected = false, onClick = cast::clearError)

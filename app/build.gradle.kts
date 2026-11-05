@@ -125,6 +125,8 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
     implementation("androidx.media3:media3-datasource:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    // Décodeur logiciel : AC3, E-AC3, DTS… sur les tablettes qui n'ont pas ces décodeurs
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.4.1+1")
 
     // Réseau + images
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -84,6 +84,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
@@ -136,7 +137,11 @@ internal fun rememberIptvPlayer(vod: Boolean = false, counter: NetCounter? = nul
                 override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
             })
         }
-        val builder = ExoPlayer.Builder(context)
+        // Décodeur FFmpeg en secours, si l'appareil ne sait pas lire la piste audio ; le matériel reste prioritaire
+        val renderers = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
+        val builder = ExoPlayer.Builder(context, renderers)
         if (vod) {
             builder.setLoadControl(
                 DefaultLoadControl.Builder()

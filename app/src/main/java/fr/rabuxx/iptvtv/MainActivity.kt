@@ -168,6 +168,15 @@ class MainActivity : ComponentActivity() {
             return true
         }
         vm.onUserActivity()
+        // Pendant un cast, les touches de volume de la tablette règlent la Chromecast
+        val controller = cast
+        val volumeKey = event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (volumeKey && controller?.connectedTo != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                controller.changeVolume(if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) 0.05 else -0.05)
+            }
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 
