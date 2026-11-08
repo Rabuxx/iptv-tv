@@ -39,4 +39,11 @@ class FormatTest {
             maskStreamPath("/movie/abcdefyz/123789/42.mp4"),
         )
     }
+
+    @Test
+    fun positionSurLaBarreDeLecture() {
+        assertEquals(50_000L, seekPosition(500f, 1000, 100_000))
+        assertEquals(100_000L, seekPosition(1500f, 1000, 100_000))
+        assertEquals(0L, seekPosition(10f, 0, 100_000))
+    }
 }

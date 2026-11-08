@@ -35,4 +35,26 @@ class DownloadLogicTest {
         assertEquals("734 Mo", formatBytes(734_000_000))
         assertEquals("1,4 Go", formatBytes(1_400_000_000))
     }
+
+    @Test
+    fun vitesseEtTempsRestant() {
+        val item = item("a", DownloadState.Running).copy(bytes = 1_000_000_000, totalBytes = 2_200_000_000, speed = 2_000_000)
+        assertEquals("1,0 Go sur 2,2 Go · 2 Mo/s · reste 10 min", downloadDetail(item))
+    }
+
+    @Test
+    fun coupureDuServeurAffichee() {
+        val item = item("a", DownloadState.Running).copy(
+            bytes = 40_000_000,
+            totalBytes = 500_000_000,
+            pause = pauseFromReason(1),
+            interruptions = 2,
+        )
+        assertEquals("40 Mo sur 500 Mo · En pause : connexion coupée, nouvel essai bientôt · 2 coupure(s)", downloadDetail(item))
+    }
+
+    @Test
+    fun echecAvecCodeHttp() {
+        assertEquals("Échec : le serveur a répondu HTTP 403", downloadDetail(item("a", DownloadState.Failed).copy(failureCode = 403)))
+    }
 }

@@ -534,6 +534,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /** Fichier téléchargé à diffuser, et sa position de reprise. */
+    fun castDownload(item: DownloadItem): Pair<CastMedia, java.io.File>? {
+        val file = downloads.localFile(item) ?: return null
+        return CastMedia(item.title, item.subtitle, item.image, item.url, item.extension, store.position(item.id)) to file
+    }
+
+    /** Chaîne en direct : flux HLS, le seul format direct que lit le récepteur Chromecast standard. */
+    fun castLive(channel: Channel): CastMedia? {
+        val c = client ?: return null
+        return CastMedia(
+            title = channel.name,
+            subtitle = "En direct",
+            image = channel.icon,
+            url = c.liveUrl(channel, "m3u8"),
+            extension = "m3u8",
+            positionMs = 0,
+            live = true,
+        )
+    }
+
     fun playDownload(item: DownloadItem) {
         val file = downloads.fileUri(item) ?: return retryDownload(item)
         push(Route.VodPlayer(title = item.title, subtitle = item.subtitle, url = file, resumeKey = item.id))
