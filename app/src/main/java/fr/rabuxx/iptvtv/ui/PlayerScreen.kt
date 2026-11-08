@@ -276,6 +276,8 @@ fun LivePlayerScreen(
     onWatched: (Channel, Long) -> Unit,
     /** Null quand l'abonnement n'autorise qu'une connexion. */
     onMultiView: ((Channel) -> Unit)?,
+    /** Tablette : envoie la chaîne vers une Chromecast. Null sur TV. */
+    onCast: ((Channel) -> Unit)? = null,
 ) {
     val player = rememberIptvPlayer()
     var index by remember { mutableIntStateOf(startIndex.coerceIn(channels.indices)) }
@@ -582,6 +584,22 @@ fun LivePlayerScreen(
         Box(Modifier.fillMaxSize()) {
             VideoSurface(player)
 
+            // Au doigt : un appui ouvre ou ferme les commandes (pause, chaînes, Chromecast…)
+            if (onCast != null) {
+                Box(
+                    Modifier.fillMaxSize().pointerInput(Unit) {
+                        detectTapGestures(onTap = {
+                            if (controlsOpen) {
+                                closeControls()
+                            } else {
+                                controlsOpen = true
+                                showInfo = true
+                            }
+                        })
+                    },
+                )
+            }
+
             when {
                 error != null -> ErrorBox(error!!, "↑ / ↓ pour changer de chaîne", Modifier.align(Alignment.Center))
                 paused -> Box(
@@ -724,6 +742,12 @@ fun LivePlayerScreen(
                                 controlsOpen = false
                                 listOpen = true
                             })
+                            if (onCast != null) {
+                                ChipButton("Chromecast", selected = false, onClick = {
+                                    closeControls()
+                                    onCast(channel)
+                                })
+                            }
                         }
                     }
                 }

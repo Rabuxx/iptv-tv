@@ -60,16 +60,20 @@ fun BoxScope.CastOverlay(cast: CastController) {
                 overflow = TextOverflow.Ellipsis,
             )
             device?.let { Text("Sur $it", color = TextSecondary, fontSize = 12.sp, maxLines = 1) }
-            if (device != null && cast.durationMs > 0) CastProgress(cast)
+            if (device != null && !cast.live && cast.durationMs > 0) CastProgress(cast)
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (device != null && cast.title != null) {
-                    ChipButton(label = "-10 s", selected = false, onClick = { cast.seekBy(-SEEK_STEP_MS) })
-                    ChipButton(label = if (cast.playing) "Pause" else "Lecture", selected = false, onClick = cast::togglePause)
-                    ChipButton(label = "+10 s", selected = false, onClick = { cast.seekBy(SEEK_STEP_MS) })
+                    if (cast.live) {
+                        Text("● En direct", color = ErrorRed, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    } else {
+                        ChipButton(label = "-10 s", selected = false, onClick = { cast.seekBy(-SEEK_STEP_MS) })
+                        ChipButton(label = if (cast.playing) "Pause" else "Lecture", selected = false, onClick = cast::togglePause)
+                        ChipButton(label = "+10 s", selected = false, onClick = { cast.seekBy(SEEK_STEP_MS) })
+                    }
                 }
                 Spacer(Modifier.weight(1f))
                 if (device != null) {

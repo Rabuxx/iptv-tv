@@ -46,6 +46,8 @@ class CastController private constructor(context: Context, private val castConte
         private set
     var playing by mutableStateOf(false)
         private set
+    var live by mutableStateOf(false)
+        private set
     var error by mutableStateOf<String?>(null)
         private set
 
@@ -209,16 +211,17 @@ class CastController private constructor(context: Context, private val castConte
             media.image?.let { addImage(WebImage(Uri.parse(it))) }
         }
         val info = MediaInfo.Builder(media.url)
-            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setStreamType(if (media.live) MediaInfo.STREAM_TYPE_LIVE else MediaInfo.STREAM_TYPE_BUFFERED)
             .setContentType(castContentType(media.extension))
             .setMetadata(metadata)
             .build()
         val request = MediaLoadRequestData.Builder()
             .setMediaInfo(info)
             .setAutoplay(true)
-            .setCurrentTime(media.positionMs.coerceAtLeast(0))
+            .apply { if (!media.live) setCurrentTime(media.positionMs.coerceAtLeast(0)) }
             .build()
         title = media.title
+        live = media.live
         remote.load(request).setResultCallback { result ->
             if (!result.status.isSuccess) {
                 title = null

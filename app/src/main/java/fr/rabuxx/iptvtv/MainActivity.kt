@@ -355,6 +355,15 @@ class MainActivity : ComponentActivity() {
                             onJumpToNumber = vm::jumpToChannelNumber,
                             onWatched = vm::recordLive,
                             onMultiView = if (state.multiViewAvailable) ({ ch: fr.rabuxx.iptvtv.data.Channel -> vm.openMultiView(listOf(ch)) }) else null,
+                            // Le lecteur de la tablette se ferme : une seule connexion pour la Chromecast
+                            onCast = cast?.let { controller ->
+                                { ch: fr.rabuxx.iptvtv.data.Channel ->
+                                    vm.castLive(ch)?.let { media ->
+                                        controller.cast(media)
+                                        vm.back()
+                                    }
+                                }
+                            },
                         )
                     }
                 }

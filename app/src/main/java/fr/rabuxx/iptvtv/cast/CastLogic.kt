@@ -8,6 +8,8 @@ data class CastMedia(
     val url: String,
     val extension: String,
     val positionMs: Long,
+    /** Chaîne en direct : pas de durée ni d'avance/recul. */
+    val live: Boolean = false,
 )
 
 /** Type du fichier annoncé à la Chromecast. */
