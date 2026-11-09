@@ -15,6 +15,8 @@ data class AppEntry(
     val activityName: String,
     val label: String,
     val image: ImageBitmap,
+    /** Icône carrée, pour le dock. */
+    val icon: ImageBitmap,
     /** Vrai pour une bannière 16:9, faux pour une simple icône à centrer dans la tuile. */
     val hasBanner: Boolean,
     val accent: Color,
@@ -70,6 +72,7 @@ class AppCatalog(private val context: Context) {
             activityName = info.activityInfo.name,
             label = info.loadLabel(pm).toString(),
             image = bitmap.asImageBitmap(),
+            icon = info.activityInfo.loadIcon(pm).toBitmap(ICON_SIZE, ICON_SIZE, Bitmap.Config.ARGB_8888).asImageBitmap(),
             hasBanner = banner != null,
             accent = averageColor(bitmap),
         )

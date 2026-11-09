@@ -46,3 +46,16 @@ fun weatherIcon(code: Int): String = when (code) {
     in 95..99 -> "⛈"
     else -> "☁"
 }
+
+/** Libellé d'un code météo WMO. */
+fun weatherLabel(code: Int): String = when (code) {
+    0 -> "Ciel dégagé"
+    1, 2 -> "Peu nuageux"
+    3 -> "Nuageux"
+    45, 48 -> "Brouillard"
+    in 51..57 -> "Bruine"
+    in 61..67, in 80..82 -> "Pluie"
+    in 71..77, 85, 86 -> "Neige"
+    in 95..99 -> "Orage"
+    else -> "Nuageux"
+}
