@@ -1,28 +1,40 @@
 package fr.rabuxx.home
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -52,214 +65,281 @@ import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.delay
-import java.time.LocalTime
+import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 private const val RABUX_PACKAGE = "fr.rabuxx.iptvtv"
-private const val COLUMNS = 6
-private const val SHELF_DELAY_MS = 9_000L
+private const val DOCK_SIZE = 7
+private const val ROTATE_MS = 9_000L
 
 private val Tile = Color(0xFF2C2C2E)
-private val GlassFill = Color(0x73000000)
+private val GlassFill = Color(0x66000000)
 private val GlassEdge = Color(0x33FFFFFF)
-private val TileShape = RoundedCornerShape(16.dp)
-private val DockShape = RoundedCornerShape(30.dp)
-private val SidePadding = 40.dp
-private val DockPadding = 14.dp
-private val TileGap = 14.dp
+private val Secondary = Color(0xFFD1D1D6)
+private val IconShape = RoundedCornerShape(18.dp)
+private val ThumbShape = RoundedCornerShape(12.dp)
+private val SidePadding = 56.dp
 
-/** Accueil façon tvOS : image plein écran, dock en verre avec les six premières apps, grille en dessous. */
+/** Ce que montre le grand fond : un contenu Rabux TV à reprendre, ou un titre populaire d'une plateforme. */
+private data class HeroItem(
+    val title: String,
+    val label: String,
+    val overview: String?,
+    val image: String,
+    val thumbnail: String,
+    val logo: String?,
+    val badge: String?,
+    val content: ShelfItem?,
+)
+
+/**
+ * Accueil façon Apple TV : le fond montre ce qui est populaire sur l'app sélectionnée dans le dock
+ * (ou tes contenus en cours pour Rabux TV), une rangée de vignettes, le dock d'icônes en bas,
+ * et l'écran de veille photo quand la TV reste inactive.
+ */
 @Composable
 fun HomeScreen(
     apps: List<AppEntry>,
     shelf: List<ShelfItem>,
+    spotlights: Map<String, List<Spotlight>>,
     weather: Weather?,
+    idle: Boolean,
     onOpen: (AppEntry) -> Unit,
     onOpenContent: (ShelfItem) -> Unit,
     onSettings: () -> Unit,
 ) {
     var focusedPackage by remember { mutableStateOf<String?>(null) }
-    var shelfIndex by remember { mutableIntStateOf(0) }
-    val firstTile = remember { FocusRequester() }
-    val scroll = rememberScrollState()
-    val current = apps.firstOrNull { it.packageName == focusedPackage } ?: apps.firstOrNull()
-    val shelfItem = shelf.takeIf { it.isNotEmpty() && current?.packageName == RABUX_PACKAGE }
-        ?.let { it[shelfIndex % it.size] }
+    var heroIndex by remember { mutableIntStateOf(0) }
+    var dockFocused by remember { mutableStateOf(true) }
+    var gridOpen by remember { mutableStateOf(false) }
+    val firstIcon = remember { FocusRequester() }
 
-    LaunchedEffect(shelf.size) {
-        while (shelf.size > 1) {
-            delay(SHELF_DELAY_MS)
-            shelfIndex = (shelfIndex + 1) % shelf.size
+    val dock = apps.take(DOCK_SIZE)
+    val current = apps.firstOrNull { it.packageName == focusedPackage } ?: dock.firstOrNull()
+    val heroes = remember(current?.packageName, shelf, spotlights) { heroItemsFor(current, shelf, spotlights) }
+    val hero = heroes.getOrNull(heroIndex.coerceAtMost((heroes.size - 1).coerceAtLeast(0)))
+
+    // Défilement automatique tant qu'on reste sur le dock
+    LaunchedEffect(current?.packageName, heroes.size, dockFocused) {
+        if (!dockFocused) return@LaunchedEffect
+        while (heroes.size > 1) {
+            delay(ROTATE_MS)
+            heroIndex = (heroIndex + 1) % heroes.size
         }
     }
 
-    // Au démarrage, ou si l'app qui avait le focus vient d'être désinstallée
     LaunchedEffect(apps.map { it.packageName }) {
         if (apps.isNotEmpty() && apps.none { it.packageName == focusedPackage }) {
-            runCatching { firstTile.requestFocus() }
+            runCatching { firstIcon.requestFocus() }
         }
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-        val tileWidth = (maxWidth - SidePadding * 2 - DockPadding * 2 - TileGap * (COLUMNS - 1)) / COLUMNS
-        val tileHeight = tileWidth * 0.6f
-        val dockTop = maxHeight * 0.64f
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Backdrop(hero, current)
 
-        HeroBackground(current, shelfItem)
         Column(Modifier.fillMaxSize()) {
-            TopBar(shelfItem, current?.label, weather, onOpenContent)
-        }
+            Row(Modifier.fillMaxWidth().weight(1f)) {
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .padding(start = SidePadding, top = 48.dp),
+                ) {
+                    HeroText(hero, current, onOpen, onOpenContent)
+                }
+                Clock(weather, Modifier.padding(top = 40.dp, end = SidePadding))
+            }
 
-        // Tuiles de la grille : les apps, puis Réglages en dernier
-        val rows = (apps.map<AppEntry, AppEntry?> { it } + null).chunked(COLUMNS)
-        Column(Modifier.fillMaxSize().verticalScroll(scroll)) {
-            Spacer(Modifier.height(dockTop))
-            rows.forEachIndexed { rowIndex, row ->
-                val rowContent: @Composable () -> Unit = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(TileGap)) {
-                        row.forEachIndexed { columnIndex, app ->
-                            val modifier = Modifier.size(tileWidth, tileHeight)
-                            if (app == null) {
-                                SettingsTile(onSettings, modifier)
-                            } else {
-                                AppTile(
-                                    app = app,
-                                    onClick = { onOpen(app) },
-                                    onFocused = { focusedPackage = app.packageName },
-                                    modifier = if (rowIndex == 0 && columnIndex == 0) {
-                                        modifier.focusRequester(firstTile)
-                                    } else {
-                                        modifier
-                                    },
-                                )
-                            }
-                        }
+            if (heroes.size > 1) {
+                Text(
+                    if (current?.packageName == RABUX_PACKAGE) "Reprendre" else "Populaire en ce moment",
+                    modifier = Modifier.padding(start = SidePadding, bottom = 6.dp),
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = SidePadding, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    itemsIndexed(heroes, key = { i, item -> "$i:${item.title}" }) { index, item ->
+                        Thumbnail(
+                            item = item,
+                            onFocused = {
+                                dockFocused = false
+                                heroIndex = index
+                            },
+                            onClick = {
+                                val content = item.content
+                                if (content != null) onOpenContent(content) else current?.let(onOpen)
+                            },
+                        )
                     }
                 }
-                if (rowIndex == 0) {
-                    Dock(rowContent)
-                } else {
-                    Box(Modifier.padding(start = SidePadding + DockPadding, top = 24.dp)) { rowContent() }
-                }
             }
-            Spacer(Modifier.height(40.dp))
+
+            Dock(
+                apps = dock,
+                focused = current?.packageName,
+                firstIcon = firstIcon,
+                onFocused = { app ->
+                    dockFocused = true
+                    if (app.packageName != focusedPackage) {
+                        focusedPackage = app.packageName
+                        heroIndex = 0
+                    }
+                },
+                onOpen = onOpen,
+                onAllApps = { gridOpen = true },
+            )
+        }
+
+        if (gridOpen) {
+            AllApps(
+                apps = apps,
+                onOpen = { gridOpen = false; onOpen(it) },
+                onSettings = { gridOpen = false; onSettings() },
+                onClose = { gridOpen = false },
+            )
+        }
+
+        if (idle) {
+            Screensaver(
+                images = remember(spotlights, shelf) {
+                    (spotlights.values.flatten().map { it.backdrop } + shelf.map { it.image }).distinct().shuffled()
+                },
+                weather = weather,
+            )
         }
     }
 }
 
-@Composable
-private fun Dock(content: @Composable () -> Unit) {
-    Box(
-        Modifier
-            .padding(horizontal = SidePadding)
-            .fillMaxWidth()
-            .clip(DockShape)
-            .background(GlassFill)
-            .border(1.dp, GlassEdge, DockShape)
-            .padding(DockPadding),
-    ) {
-        content()
+private fun heroItemsFor(app: AppEntry?, shelf: List<ShelfItem>, spotlights: Map<String, List<Spotlight>>): List<HeroItem> {
+    if (app == null) return emptyList()
+    if (app.packageName == RABUX_PACKAGE) {
+        return shelf.map {
+            HeroItem(it.title, "Rabux TV · À reprendre", null, it.image, it.image, null, it.subtitle, it)
+        }
+    }
+    val provider = PROVIDERS[app.packageName]?.first ?: return emptyList()
+    return spotlights[app.packageName].orEmpty().map {
+        HeroItem(
+            title = it.title,
+            label = "$provider · ${if (it.isSeries) "Série" else "Film"} populaire en France",
+            overview = it.overview,
+            image = it.backdrop,
+            thumbnail = it.thumbnail,
+            logo = it.logo,
+            badge = null,
+            content = null,
+        )
     }
 }
 
-/** Sans contenu Rabux, le fond reprend la couleur et la bannière de l'app sélectionnée. */
+/** Image plein écran, ou à défaut la couleur et la bannière de l'app sélectionnée. */
 @Composable
-private fun HeroBackground(app: AppEntry?, item: ShelfItem?) {
+private fun Backdrop(hero: HeroItem?, app: AppEntry?) {
     val tint by animateColorAsState(
         targetValue = lerp(app?.accent ?: Tile, Color.Black, 0.5f),
         animationSpec = tween(450),
         label = "tint",
     )
-    Crossfade(targetState = item, animationSpec = tween(600), label = "hero") { shown ->
+    Crossfade(targetState = hero?.image, animationSpec = tween(700), label = "backdrop") { image ->
         Box(Modifier.fillMaxSize()) {
-            if (shown != null) {
+            if (image != null) {
                 AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current).data(shown.image).crossfade(true).build(),
+                    model = ImageRequest.Builder(LocalContext.current).data(image).crossfade(true).build(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
             } else {
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to tint, 0.8f to Color.Black)))
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to tint, 0.85f to Color.Black)))
                 if (app != null && app.hasBanner) {
                     Image(
                         bitmap = app.image,
                         contentDescription = null,
                         modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 90.dp)
-                            .width(360.dp)
-                            .clip(TileShape),
+                            .align(Alignment.Center)
+                            .padding(bottom = 120.dp)
+                            .width(380.dp)
+                            .clip(ThumbShape),
                         contentScale = ContentScale.Fit,
                     )
                 }
             }
         }
     }
-    // Voiles sombres : le texte et le dock restent lisibles sur n'importe quelle image
+    // Voiles : le texte à gauche et le dock en bas restent lisibles sur n'importe quelle image
     Box(
         Modifier.fillMaxSize().background(
-            Brush.verticalGradient(0f to Color(0x99000000), 0.35f to Color.Transparent, 1f to Color(0xCC000000)),
+            Brush.horizontalGradient(0f to Color(0xD9000000), 0.55f to Color(0x33000000), 1f to Color.Transparent),
+        ),
+    )
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(0f to Color(0x66000000), 0.3f to Color.Transparent, 0.6f to Color.Transparent, 1f to Color(0xF2000000)),
         ),
     )
 }
 
 @Composable
-private fun TopBar(item: ShelfItem?, appLabel: String?, weather: Weather?, onOpenContent: (ShelfItem) -> Unit) {
-    var now by remember { mutableStateOf(LocalTime.now()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = LocalTime.now()
-            delay((60 - now.second) * 1000L)
-        }
-    }
-    Row(
-        Modifier.fillMaxWidth().padding(start = 52.dp, end = 52.dp, top = 34.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                item?.title ?: appLabel.orEmpty(),
-                color = Color.White,
-                fontSize = 44.sp,
-                fontWeight = FontWeight.Black,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            item?.subtitle?.let {
-                Text(it, color = Color(0xFFE5E5EA), fontSize = 17.sp, modifier = Modifier.padding(top = 6.dp))
+private fun HeroText(
+    hero: HeroItem?,
+    app: AppEntry?,
+    onOpen: (AppEntry) -> Unit,
+    onOpenContent: (ShelfItem) -> Unit,
+) {
+    Crossfade(targetState = hero, animationSpec = tween(500), label = "hero-text") { shown ->
+        Column(Modifier.widthIn(max = 560.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (shown == null) {
+                Text(
+                    app?.label.orEmpty(),
+                    color = Color.White,
+                    fontSize = 44.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                return@Column
             }
-            if (item != null) {
-                Spacer(Modifier.height(14.dp))
-                ResumeButton { onOpenContent(item) }
+            Text(shown.label, color = Secondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            if (shown.logo != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(shown.logo).crossfade(true).build(),
+                    contentDescription = shown.title,
+                    modifier = Modifier.heightIn(max = 110.dp).widthIn(max = 440.dp),
+                    contentScale = ContentScale.Fit,
+                    alignment = Alignment.CenterStart,
+                )
+            } else {
+                Text(
+                    shown.title,
+                    color = Color.White,
+                    fontSize = 44.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            shown.overview?.let {
+                Text(it, color = Color(0xFFE5E5EA), fontSize = 15.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                val content = shown.content
+                Pill(
+                    text = if (content != null) "▶  Reprendre" else "▶  Ouvrir ${app?.label.orEmpty()}",
+                    onClick = { if (content != null) onOpenContent(content) else app?.let(onOpen) },
+                )
+                shown.badge?.let { Tag(it) }
             }
         }
-        Spacer(Modifier.width(32.dp))
-        weather?.let {
-            Pill("${weatherIcon(it.code)}  ${it.temperature}°  ${WeatherApi.CITY}")
-            Spacer(Modifier.width(10.dp))
-        }
-        Pill(now.format(DateTimeFormatter.ofPattern("HH:mm")))
     }
 }
 
 @Composable
-private fun Pill(text: String) {
-    Text(
-        text,
-        modifier = Modifier
-            .clip(CircleShape)
-            .background(GlassFill)
-            .border(1.dp, GlassEdge, CircleShape)
-            .padding(horizontal = 16.dp, vertical = 7.dp),
-        color = Color.White,
-        fontSize = 17.sp,
-        fontWeight = FontWeight.SemiBold,
-    )
-}
-
-@Composable
-private fun ResumeButton(onClick: () -> Unit) {
+private fun Pill(text: String, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(CircleShape),
@@ -273,52 +353,245 @@ private fun ResumeButton(onClick: () -> Unit) {
         ),
         scale = ClickableSurfaceDefaults.scale(focusedScale = 1.08f),
     ) {
+        Text(text, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+private fun Tag(text: String) {
+    Text(
+        text,
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(GlassFill)
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        color = Color.White,
+        fontSize = 14.sp,
+    )
+}
+
+@Composable
+private fun Clock(weather: Weather?, modifier: Modifier = Modifier) {
+    val now = rememberNow()
+    Column(modifier, horizontalAlignment = Alignment.End) {
+        Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            "▶  Reprendre",
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
+            now.format(DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.FRENCH)).replaceFirstChar { it.uppercase() },
+            color = Secondary,
+            fontSize = 13.sp,
         )
-    }
-}
-
-@Composable
-private fun AppTile(app: AppEntry, onClick: () -> Unit, onFocused: () -> Unit, modifier: Modifier = Modifier) {
-    TileSurface(onClick, modifier.onFocusChanged { if (it.isFocused) onFocused() }) {
-        Image(
-            bitmap = app.image,
-            contentDescription = app.label,
-            modifier = if (app.hasBanner) Modifier.fillMaxSize() else Modifier.fillMaxSize().padding(16.dp),
-            contentScale = if (app.hasBanner) ContentScale.Crop else ContentScale.Fit,
-        )
-    }
-}
-
-@Composable
-private fun SettingsTile(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    TileSurface(onClick, modifier) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Réglages", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        weather?.let {
+            Text(
+                "${weatherIcon(it.code)}  ${it.temperature}°  ${WeatherApi.CITY}",
+                color = Secondary,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 2.dp),
+            )
         }
     }
 }
 
 @Composable
-private fun TileSurface(onClick: () -> Unit, modifier: Modifier, content: @Composable () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        shape = ClickableSurfaceDefaults.shape(TileShape),
-        colors = ClickableSurfaceDefaults.colors(
-            containerColor = Tile,
-            focusedContainerColor = Tile,
-            pressedContainerColor = Tile,
-        ),
-        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.12f),
-        border = ClickableSurfaceDefaults.border(
-            focusedBorder = Border(border = BorderStroke(2.dp, Color.White), shape = TileShape),
-        ),
+private fun rememberNow(): LocalDateTime {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            delay((60 - now.second) * 1000L)
+        }
+    }
+    return now
+}
+
+@Composable
+private fun Thumbnail(item: HeroItem, onFocused: () -> Unit, onClick: () -> Unit) {
+    Column(Modifier.width(196.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Surface(
+            onClick = onClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .onFocusChanged { if (it.isFocused) onFocused() },
+            shape = ClickableSurfaceDefaults.shape(ThumbShape),
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = Tile,
+                focusedContainerColor = Tile,
+                pressedContainerColor = Tile,
+            ),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
+            border = ClickableSurfaceDefaults.border(
+                focusedBorder = Border(border = BorderStroke(2.dp, Color.White), shape = ThumbShape),
+            ),
+        ) {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current).data(item.thumbnail).crossfade(true).build(),
+                contentDescription = item.title,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+        }
+        Text(item.title, color = Secondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Dock d'icônes centré : l'icône sélectionnée grossit et affiche son nom. */
+@Composable
+private fun Dock(
+    apps: List<AppEntry>,
+    focused: String?,
+    firstIcon: FocusRequester,
+    onFocused: (AppEntry) -> Unit,
+    onOpen: (AppEntry) -> Unit,
+    onAllApps: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 28.dp),
+        horizontalArrangement = Arrangement.spacedBy(22.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.Top,
     ) {
-        content()
+        apps.forEachIndexed { index, app ->
+            DockIcon(
+                label = app.label,
+                selected = app.packageName == focused,
+                onClick = { onOpen(app) },
+                modifier = (if (index == 0) Modifier.focusRequester(firstIcon) else Modifier)
+                    .onFocusChanged { if (it.isFocused) onFocused(app) },
+            ) {
+                Image(bitmap = app.icon, contentDescription = app.label, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            }
+        }
+        DockIcon(label = "Toutes les apps", selected = false, onClick = onAllApps) {
+            Box(Modifier.fillMaxSize().background(Tile), contentAlignment = Alignment.Center) {
+                Text("▦", color = Color.White, fontSize = 26.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DockIcon(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    var hasFocus by remember { mutableStateOf(false) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(96.dp)) {
+        Surface(
+            onClick = onClick,
+            modifier = modifier
+                .size(64.dp)
+                .onFocusChanged { hasFocus = it.isFocused },
+            shape = ClickableSurfaceDefaults.shape(IconShape),
+            colors = ClickableSurfaceDefaults.colors(
+                containerColor = Tile,
+                focusedContainerColor = Tile,
+                pressedContainerColor = Tile,
+            ),
+            scale = ClickableSurfaceDefaults.scale(focusedScale = 1.3f),
+            border = ClickableSurfaceDefaults.border(
+                focusedBorder = Border(border = BorderStroke(2.dp, Color.White), shape = IconShape),
+            ),
+        ) {
+            content()
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            if (hasFocus || selected) label else "",
+            color = Color.White,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** Toutes les apps installées, en grille, avec les réglages en dernier. */
+@Composable
+private fun AllApps(apps: List<AppEntry>, onOpen: (AppEntry) -> Unit, onSettings: () -> Unit, onClose: () -> Unit) {
+    BackHandler(onBack = onClose)
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    Box(Modifier.fillMaxSize().background(Color(0xF0000000))) {
+        Column(Modifier.fillMaxSize().padding(horizontal = SidePadding, vertical = 36.dp)) {
+            Text("Toutes les apps", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(20.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(6),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp),
+                contentPadding = PaddingValues(12.dp),
+            ) {
+                items(apps.size + 1) { index ->
+                    val app = apps.getOrNull(index)
+                    Surface(
+                        onClick = { if (app != null) onOpen(app) else onSettings() },
+                        modifier = (if (index == 0) Modifier.focusRequester(first) else Modifier).aspectRatio(16f / 9f),
+                        shape = ClickableSurfaceDefaults.shape(ThumbShape),
+                        colors = ClickableSurfaceDefaults.colors(
+                            containerColor = Tile,
+                            focusedContainerColor = Tile,
+                            pressedContainerColor = Tile,
+                        ),
+                        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.1f),
+                        border = ClickableSurfaceDefaults.border(
+                            focusedBorder = Border(border = BorderStroke(2.dp, Color.White), shape = ThumbShape),
+                        ),
+                    ) {
+                        when {
+                            app == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                Text("Réglages", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                            app.hasBanner -> Image(app.image, app.label, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            else -> Image(app.image, app.label, Modifier.fillMaxSize().padding(14.dp), contentScale = ContentScale.Fit)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Écran de veille : photos plein écran qui zooment lentement, grande heure et météo. */
+@Composable
+private fun Screensaver(images: List<String>, weather: Weather?) {
+    var index by remember { mutableIntStateOf(0) }
+    LaunchedEffect(images.size) {
+        while (images.size > 1) {
+            delay(20_000)
+            index = (index + 1) % images.size
+        }
+    }
+    val zoom by rememberInfiniteTransition(label = "zoom").animateFloat(
+        initialValue = 1f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(tween(20_000, easing = LinearEasing), RepeatMode.Reverse),
+        label = "zoom",
+    )
+    val now = rememberNow()
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        Crossfade(targetState = images.getOrNull(index), animationSpec = tween(1_500), label = "saver") { image ->
+            if (image != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(image).build(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize().scale(zoom),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+        }
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color(0xB3000000))))
+        Column(Modifier.align(Alignment.BottomStart).padding(start = SidePadding, bottom = 48.dp)) {
+            Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), color = Color.White, fontSize = 96.sp, fontWeight = FontWeight.Bold)
+            weather?.let {
+                Text(
+                    "${WeatherApi.CITY}  ·  ${it.temperature}°  ·  ${weatherLabel(it.code)}",
+                    color = Color.White,
+                    fontSize = 20.sp,
+                )
+            }
+        }
     }
 }

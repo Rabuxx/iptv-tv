@@ -21,6 +21,13 @@ val appVersionCode: Int = run {
     (base * 100 + pre).coerceAtLeast(1)
 }
 
+// Clé TMDB (facultative) : secret GitHub TMDB_API_KEY en CI, local.properties en local
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val tmdbKey: String = (System.getenv("TMDB_API_KEY") ?: localProps.getProperty("TMDB_API_KEY") ?: "").replace("\"", "").trim()
+
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -38,6 +45,7 @@ android {
         targetSdk = 34
         versionCode = appVersionCode
         versionName = appVersion
+        buildConfigField("String", "TMDB_API_KEY", "\"$tmdbKey\"")
     }
 
     signingConfigs {
@@ -71,6 +79,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     lint {
