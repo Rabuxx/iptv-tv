@@ -82,6 +82,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.CaptionStyleCompat
@@ -134,7 +135,12 @@ internal fun rememberIptvPlayer(vod: Boolean = false, counter: NetCounter? = nul
                 override fun onTransferEnd(source: DataSource, dataSpec: DataSpec, isNetwork: Boolean) = Unit
             })
         }
-        val builder = ExoPlayer.Builder(context)
+        // Son absent sur certaines chaînes : piste AC3 / E-AC3 / DTS que la TV ne décode pas.
+        // FFmpeg prend le relais seulement quand le décodeur de la TV en est incapable.
+        val renderers = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
+        val builder = ExoPlayer.Builder(context, renderers)
         if (vod) {
             builder.setLoadControl(
                 DefaultLoadControl.Builder()
