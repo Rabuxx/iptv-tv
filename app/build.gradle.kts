@@ -126,7 +126,7 @@ dependencies {
     implementation("androidx.media3:media3-datasource:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
     // Décodeur audio FFmpeg (AC3, E-AC3, DTS, TrueHD...) : utilisé quand la TV ne sait pas décoder la piste
-    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.5.0+1")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+")
 
     // Réseau + images
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
