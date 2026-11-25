@@ -116,7 +116,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.tv:tv-material:1.0.0")
+    implementation("androidx.tv:tv-material:1.1.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.6")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 
@@ -134,11 +134,11 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     // Rangée « À suivre » de l'écran d'accueil Android TV
-    implementation("androidx.tvprovider:tvprovider:1.0.0")
+    implementation("androidx.tvprovider:tvprovider:1.1.0")
 
     // Envoi vers une Chromecast (tablette)
     implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
-    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    implementation("androidx.mediarouter:mediarouter:1.9.0")
     // Même version que les tests d'interface : sinon, conflit à la compilation de ces tests
     implementation("androidx.tracing:tracing:1.1.0")
 
